@@ -17,11 +17,14 @@ TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN"
 CLIENT_ID = os.getenv("CLIENT_ID") or "YOUR_CLIENT_ID"
 CLIENT_SECRET = os.getenv("CLIENT_SECRET") or "YOUR_CLIENT_SECRET"
 OWNER_ID = int(os.getenv("OWNER_ID") or 0)
+OWNER_ID_2 = int(os.getenv("OWNER_ID_2") or 0)
 REQUIRED_GUILD_ID = int(os.getenv("REQUIRED_GUILD_ID") or 0)
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID") or 1560370435797950597)
 WHITELIST_LOG_CHANNEL_ID = int(os.getenv("WHITELIST_LOG_CHANNEL_ID") or 1560375659501719623)
 PREFIX = os.getenv("PREFIX") or "/"
 REDIRECT_URI = os.getenv("REDIRECT_URI") or "http://localhost:8080/callback"
+
+OWNER_IDS = {uid for uid in (OWNER_ID, OWNER_ID_2) if uid}
 
 INVITE = "https://discord.gg/SKyfbZxzbp"
 DATA_FILE = Path("data.json")
@@ -51,7 +54,7 @@ def save_data(data):
 data = load_data()
 
 def is_owner_user(user_id: int) -> bool:
-    return user_id == OWNER_ID
+    return user_id in OWNER_IDS
 
 def cleanup_whitelist():
     now = datetime.now(timezone.utc)
@@ -71,7 +74,7 @@ def cleanup_whitelist():
         save_data(data)
 
 def is_whitelisted_user(user_id: int) -> bool:
-    if user_id == OWNER_ID:
+    if user_id in OWNER_IDS:
         return True
     cleanup_whitelist()
     entry = data.get("whitelist", {}).get(str(user_id))
@@ -120,11 +123,6 @@ async def resolve_channel(interaction: discord.Interaction):
     return None
 
 async def public_send(interaction: discord.Interaction, content: str):
-    """
-    Send a public message in the current channel.
-    1) Try normal channel.send (bot is in guild)
-    2) Fallback: interaction followup (external app — works without bot in guild)
-    """
     channel = await resolve_channel(interaction)
     if channel is not None:
         try:
@@ -135,7 +133,6 @@ async def public_send(interaction: discord.Interaction, content: str):
         except Exception as e:
             print(f"channel.send failed, falling back to followup: {e}")
 
-    # External app path — posts via interaction token, no guild membership needed
     msg = await interaction.followup.send(content, ephemeral=False)
     try:
         data.setdefault("sent_messages", []).append({"channel_id": interaction.channel_id, "message_id": msg.id})
@@ -233,6 +230,7 @@ class StopSpamView(discord.ui.View):
 @bot.event
 async def on_ready():
     print(f"logged in as {bot.user} | {bot.user.id}")
+    print(f"owners: {OWNER_IDS}")
     print(f"in {len(bot.guilds)} guild(s)")
     for g in bot.guilds:
         print(f"  - {g.name} ({g.id})")
