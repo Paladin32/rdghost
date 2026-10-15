@@ -28,7 +28,6 @@ DATA_FILE = Path("data.json")
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
-# external / user-installable app
 bot.tree.allowed_contexts = discord.app_commands.AppCommandContext(guild=True, dm_channel=True, private_channel=True)
 bot.tree.allowed_installs = discord.app_commands.AppInstallationType(guild=True, user=True)
 
@@ -37,7 +36,6 @@ def load_data():
         raw = json.loads(DATA_FILE.read_text())
     else:
         raw = {}
-    # migrate old list whitelist → dict
     wl = raw.get("whitelist", {})
     if isinstance(wl, list):
         wl = {str(uid): "2099-01-01T00:00:00+00:00" for uid in wl}
@@ -244,7 +242,8 @@ async def adspam(interaction: discord.Interaction):
         return
     if not interaction.guild:
         return await interaction.response.send_message("Server only.", ephemeral=True)
-    await interaction.response.defer(ephemeral=True)
+    # ephemeral ack — no "user used /adspam" on public side
+    await interaction.response.send_message("running...", ephemeral=True)
     await log_command(interaction, "adspam")
 
     blocks = [
@@ -260,17 +259,15 @@ async def adspam(interaction: discord.Interaction):
         await safe_send(interaction.channel, content)
         await asyncio.sleep(0.45)
 
-    await interaction.followup.send("adspam done", ephemeral=True)
-
-@bot.tree.command(name="test", description="Test if the bot works (sends then deletes)")
+@bot.tree.command(name="test", description="Test if the bot works")
 async def test(interaction: discord.Interaction):
     if not await must_be_in_required_guild(interaction):
         return
     if not interaction.guild:
         return await interaction.response.send_message("Server only.", ephemeral=True)
+    await interaction.response.send_message("ok", ephemeral=True)
     await log_command(interaction, "test")
-    await interaction.response.send_message("bot online", ephemeral=True)
-    msg = await interaction.original_response()
+    msg = await safe_send(interaction.channel, "bot online")
     await asyncio.sleep(1.2)
     try:
         await msg.delete()
@@ -287,7 +284,7 @@ async def whitelist(interaction: discord.Interaction, member: discord.Member, mi
     if minutes < 1:
         minutes = 1
     if minutes > 10080:
-        minutes = 10080  # max 7 days
+        minutes = 10080
 
     expires = datetime.now(timezone.utc) + timedelta(minutes=minutes)
     data.setdefault("whitelist", {})[str(member.id)] = expires.isoformat()
@@ -319,12 +316,10 @@ async def blame(interaction: discord.Interaction, member: discord.Member = None)
     if not interaction.guild:
         return await interaction.response.send_message("Server only.", ephemeral=True)
     target = member or interaction.user
+    # ephemeral ack first → public message has NO "user used /blame"
+    await interaction.response.send_message("sent", ephemeral=True)
     await log_command(interaction, "blame", extra=f"Target: <@{target.id}>")
-    # public action, but ack stays hidden via followup if needed — send public then done
-    await interaction.response.send_message(
-        f"**{target.mention}** just raided this server. Report them.",
-        ephemeral=False
-    )
+    await safe_send(interaction.channel, f"**{target.mention}** just raided this server. Report them.")
 
 @bot.tree.command(name="ghostping", description="Ghost ping a user")
 @app_commands.describe(member="User to ghost ping")
@@ -333,9 +328,9 @@ async def ghostping(interaction: discord.Interaction, member: discord.Member):
         return
     if not interaction.guild:
         return await interaction.response.send_message("Server only.", ephemeral=True)
+    await interaction.response.send_message("sent", ephemeral=True)
     await log_command(interaction, "ghostping", extra=f"Target: <@{member.id}>")
-    await interaction.response.send_message(member.mention)
-    msg = await interaction.original_response()
+    msg = await safe_send(interaction.channel, member.mention)
     await asyncio.sleep(0.6)
     try:
         await msg.delete()
@@ -392,7 +387,7 @@ async def editspam(interaction: discord.Interaction, text: str):
         return await interaction.response.send_message("Whitelist only.", ephemeral=True)
     if not interaction.guild:
         return await interaction.response.send_message("Server only.", ephemeral=True)
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.send_message("running...", ephemeral=True)
     await log_command(interaction, "editspam", extra=f"Text: `{text[:200]}`")
     msg = await safe_send(interaction.channel, text)
     for i in range(12):
@@ -401,7 +396,6 @@ async def editspam(interaction: discord.Interaction, text: str):
             await asyncio.sleep(0.45)
         except:
             break
-    await interaction.followup.send("editspam done", ephemeral=True)
 
 @bot.tree.command(name="spam", description="Spam the channel (whitelist only) — has STOP button")
 @app_commands.describe(text="Text to spam")
@@ -436,7 +430,7 @@ async def dmspam(interaction: discord.Interaction, member: discord.Member, text:
         return
     if not is_whitelisted_user(interaction.user.id):
         return await interaction.response.send_message("Whitelist only.", ephemeral=True)
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.send_message("running...", ephemeral=True)
     await log_command(interaction, "dmspam", extra=f"Target: <@{member.id}>\nText: `{text[:200]}`")
     for _ in range(8):
         try:
@@ -444,7 +438,6 @@ async def dmspam(interaction: discord.Interaction, member: discord.Member, text:
             await asyncio.sleep(0.7)
         except:
             break
-    await interaction.followup.send("dmspam done", ephemeral=True)
 
 @bot.tree.command(name="serverjoin", description="Force all authorized users into a server (owner only)")
 @app_commands.describe(server_id="Target guild ID")
