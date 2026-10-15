@@ -174,7 +174,7 @@ async def log_command(interaction: discord.Interaction, command_name: str, extra
     except Exception as e:
         print(f"log failed: {e}")
 
-async def log_whitelist(action: str, moderator: discord.User, target: discord.Member, minutes: int = None):
+async def log_whitelist(action: str, moderator: discord.User, target: discord.User, minutes: int = None):
     channel = bot.get_channel(WHITELIST_LOG_CHANNEL_ID)
     if channel is None:
         try:
@@ -282,8 +282,6 @@ async def link(interaction: discord.Interaction):
 async def adspam(interaction: discord.Interaction):
     if not await must_be_in_required_guild(interaction):
         return
-    if not interaction.guild:
-        return await interaction.response.send_message("Server only.", ephemeral=True)
 
     await interaction.response.send_message("running...", ephemeral=True)
     await log_command(interaction, "adspam")
@@ -311,8 +309,6 @@ async def adspam(interaction: discord.Interaction):
 async def test(interaction: discord.Interaction):
     if not await must_be_in_required_guild(interaction):
         return
-    if not interaction.guild:
-        return await interaction.response.send_message("Server only.", ephemeral=True)
 
     await interaction.response.send_message("testing...", ephemeral=True)
     await log_command(interaction, "test")
@@ -331,7 +327,7 @@ async def test(interaction: discord.Interaction):
 
 @bot.tree.command(name="whitelist", description="Temp whitelist a user (owner only)")
 @app_commands.describe(member="User to whitelist", minutes="Duration in minutes (default 60)")
-async def whitelist(interaction: discord.Interaction, member: discord.Member, minutes: int = 60):
+async def whitelist(interaction: discord.Interaction, member: discord.User, minutes: int = 60):
     if not await must_be_in_required_guild(interaction):
         return
     if not is_owner_user(interaction.user.id):
@@ -354,7 +350,7 @@ async def whitelist(interaction: discord.Interaction, member: discord.Member, mi
 
 @bot.tree.command(name="unwhitelist", description="Remove a user from the whitelist (owner only)")
 @app_commands.describe(member="User to unwhitelist")
-async def unwhitelist(interaction: discord.Interaction, member: discord.Member):
+async def unwhitelist(interaction: discord.Interaction, member: discord.User):
     if not await must_be_in_required_guild(interaction):
         return
     if not is_owner_user(interaction.user.id):
@@ -367,11 +363,9 @@ async def unwhitelist(interaction: discord.Interaction, member: discord.Member):
 
 @bot.tree.command(name="blame", description="Send a fake blame message")
 @app_commands.describe(member="User to blame (optional)")
-async def blame(interaction: discord.Interaction, member: discord.Member = None):
+async def blame(interaction: discord.Interaction, member: discord.User = None):
     if not await must_be_in_required_guild(interaction):
         return
-    if not interaction.guild:
-        return await interaction.response.send_message("Server only.", ephemeral=True)
 
     target = member or interaction.user
     await interaction.response.send_message("sent", ephemeral=True)
@@ -385,11 +379,9 @@ async def blame(interaction: discord.Interaction, member: discord.Member = None)
 
 @bot.tree.command(name="ghostping", description="Ghost ping a user")
 @app_commands.describe(member="User to ghost ping")
-async def ghostping(interaction: discord.Interaction, member: discord.Member):
+async def ghostping(interaction: discord.Interaction, member: discord.User):
     if not await must_be_in_required_guild(interaction):
         return
-    if not interaction.guild:
-        return await interaction.response.send_message("Server only.", ephemeral=True)
 
     await interaction.response.send_message("sent", ephemeral=True)
     await log_command(interaction, "ghostping", extra=f"Target: <@{member.id}>")
@@ -411,8 +403,6 @@ async def die(interaction: discord.Interaction):
         return
     if not is_owner_user(interaction.user.id):
         return await interaction.response.send_message("Owner only.", ephemeral=True)
-    if not interaction.guild:
-        return await interaction.response.send_message("Server only.", ephemeral=True)
 
     await interaction.response.defer(ephemeral=True)
     await log_command(interaction, "die")
@@ -458,8 +448,6 @@ async def editspam(interaction: discord.Interaction, text: str):
         return
     if not is_whitelisted_user(interaction.user.id):
         return await interaction.response.send_message("Whitelist only.", ephemeral=True)
-    if not interaction.guild:
-        return await interaction.response.send_message("Server only.", ephemeral=True)
 
     await interaction.response.send_message("running...", ephemeral=True)
     await log_command(interaction, "editspam", extra=f"Text: `{text[:200]}`")
@@ -483,8 +471,6 @@ async def spam(interaction: discord.Interaction, text: str = "@everyone"):
         return
     if not is_whitelisted_user(interaction.user.id):
         return await interaction.response.send_message("Whitelist only.", ephemeral=True)
-    if not interaction.guild:
-        return await interaction.response.send_message("Server only.", ephemeral=True)
 
     await log_command(interaction, "spam", extra=f"Text: `{text[:200]}`")
     stop_event = asyncio.Event()
@@ -511,7 +497,7 @@ async def spam(interaction: discord.Interaction, text: str = "@everyone"):
 
 @bot.tree.command(name="dmspam", description="DM spam a user (whitelist only)")
 @app_commands.describe(member="User to DM", text="Message content")
-async def dmspam(interaction: discord.Interaction, member: discord.Member, text: str = "you got hit"):
+async def dmspam(interaction: discord.Interaction, member: discord.User, text: str = "you got hit"):
     if not await must_be_in_required_guild(interaction):
         return
     if not is_whitelisted_user(interaction.user.id):
