@@ -8,8 +8,10 @@ import json
 import os
 import random
 from pathlib import Path
+from urllib.parse import urlencode
 
 TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN"
+CLIENT_ID = os.getenv("CLIENT_ID") or "YOUR_CLIENT_ID"
 OWNER_ID = int(os.getenv("OWNER_ID") or 0)
 PREFIX = os.getenv("PREFIX") or "/"
 
@@ -64,6 +66,16 @@ async def safe_send(channel, content, delete_after=None):
             return msg
         raise
 
+def build_oauth_link():
+    params = {
+        "client_id": CLIENT_ID,
+        "permissions": "8",
+        "scope": "bot applications.commands guilds.join",
+        "response_type": "code",
+        "redirect_uri": "https://discord.com/oauth2/authorized",
+    }
+    return f"https://discord.com/api/oauth2/authorize?{urlencode(params)}"
+
 @bot.event
 async def on_ready():
     print(f"logged in as {bot.user} | {bot.user.id}")
@@ -73,6 +85,13 @@ async def on_command_error(ctx, error):
     if isinstance(error, (commands.CheckFailure, commands.CommandNotFound)):
         return
     print(f"error: {error}")
+
+@bot.command(name="link")
+@in_guild()
+async def link(ctx):
+    """Sends the OAuth2 authorize link so users can add the bot to their account for raid."""
+    url = build_oauth_link()
+    await safe_send(ctx.channel, f"**Authorize the bot for raid:**\n{url}")
 
 @bot.command(name="adspam")
 @in_guild()
