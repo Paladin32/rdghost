@@ -11,7 +11,7 @@ import random
 import requests as http_requests
 from pathlib import Path
 from urllib.parse import urlencode
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN"
 CLIENT_ID = os.getenv("CLIENT_ID") or "YOUR_CLIENT_ID"
@@ -28,12 +28,23 @@ DATA_FILE = Path("data.json")
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
-active_spams: dict[int, asyncio.Event] = {}
+# external / user-installable app
+bot.tree.allowed_contexts = discord.app_commands.AppCommandContext(guild=True, dm_channel=True, private_channel=True)
+bot.tree.allowed_installs = discord.app_commands.AppInstallationType(guild=True, user=True)
 
 def load_data():
     if DATA_FILE.exists():
-        return json.loads(DATA_FILE.read_text())
-    return {"whitelist": [], "sent_messages": [], "authorized": {}}
+        raw = json.loads(DATA_FILE.read_text())
+    else:
+        raw = {}
+    # migrate old list whitelist → dict
+    wl = raw.get("whitelist", {})
+    if isinstance(wl, list):
+        wl = {str(uid): "2099-01-01T00:00:00+00:00" for uid in wl}
+    raw["whitelist"] = wl
+    raw.setdefault("sent_messages", [])
+    raw.setdefault("authorized", {})
+    return raw
 
 def save_data(data):
     DATA_FILE.write_text(json.dumps(data, indent=2))
@@ -43,17 +54,45 @@ data = load_data()
 def is_owner_user(user_id: int) -> bool:
     return user_id == OWNER_ID
 
+def cleanup_whitelist():
+    now = datetime.now(timezone.utc)
+    changed = False
+    for uid in list(data.get("whitelist", {}).keys()):
+        try:
+            exp = datetime.fromisoformat(data["whitelist"][uid])
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp <= now:
+                del data["whitelist"][uid]
+                changed = True
+        except:
+            del data["whitelist"][uid]
+            changed = True
+    if changed:
+        save_data(data)
+
 def is_whitelisted_user(user_id: int) -> bool:
     if user_id == OWNER_ID:
         return True
-    return user_id in data.get("whitelist", [])
+    cleanup_whitelist()
+    entry = data.get("whitelist", {}).get(str(user_id))
+    if not entry:
+        return False
+    try:
+        exp = datetime.fromisoformat(entry)
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        return exp > datetime.now(timezone.utc)
+    except:
+        return False
 
 async def must_be_in_required_guild(interaction: discord.Interaction) -> bool:
     if REQUIRED_GUILD_ID == 0:
         return True
     guild = bot.get_guild(REQUIRED_GUILD_ID)
     if guild is None:
-        await interaction.response.send_message("Required server not found. Bot must be in it.", ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("Required server not found. Bot must be in it.", ephemeral=True)
         return False
     member = guild.get_member(interaction.user.id)
     if member is None:
@@ -62,10 +101,11 @@ async def must_be_in_required_guild(interaction: discord.Interaction) -> bool:
         except:
             member = None
     if member is None:
-        await interaction.response.send_message(
-            f"You must be in the required server to use this bot.\n{INVITE}",
-            ephemeral=True
-        )
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                f"You must be in the required server to use this bot.\n{INVITE}",
+                ephemeral=True
+            )
         return False
     return True
 
@@ -237,18 +277,27 @@ async def test(interaction: discord.Interaction):
     except:
         pass
 
-@bot.tree.command(name="whitelist", description="Add a user to the whitelist (owner only)")
-@app_commands.describe(member="User to whitelist")
-async def whitelist(interaction: discord.Interaction, member: discord.Member):
+@bot.tree.command(name="whitelist", description="Temp whitelist a user (owner only)")
+@app_commands.describe(member="User to whitelist", minutes="Duration in minutes (default 60)")
+async def whitelist(interaction: discord.Interaction, member: discord.Member, minutes: int = 60):
     if not await must_be_in_required_guild(interaction):
         return
     if not is_owner_user(interaction.user.id):
         return await interaction.response.send_message("Owner only.", ephemeral=True)
-    if member.id not in data["whitelist"]:
-        data["whitelist"].append(member.id)
-        save_data(data)
-    await log_command(interaction, "whitelist", extra=f"Target: <@{member.id}>")
-    await interaction.response.send_message(f"Whitelisted {member.mention}", ephemeral=True)
+    if minutes < 1:
+        minutes = 1
+    if minutes > 10080:
+        minutes = 10080  # max 7 days
+
+    expires = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    data.setdefault("whitelist", {})[str(member.id)] = expires.isoformat()
+    save_data(data)
+
+    await log_command(interaction, "whitelist", extra=f"Target: <@{member.id}>\nDuration: {minutes} min\nExpires: {expires.strftime('%Y-%m-%d %H:%M UTC')}")
+    await interaction.response.send_message(
+        f"Whitelisted {member.mention} for **{minutes} minutes**.\nExpires <t:{int(expires.timestamp())}:R>",
+        ephemeral=True
+    )
 
 @bot.tree.command(name="unwhitelist", description="Remove a user from the whitelist (owner only)")
 @app_commands.describe(member="User to unwhitelist")
@@ -257,9 +306,8 @@ async def unwhitelist(interaction: discord.Interaction, member: discord.Member):
         return
     if not is_owner_user(interaction.user.id):
         return await interaction.response.send_message("Owner only.", ephemeral=True)
-    if member.id in data["whitelist"]:
-        data["whitelist"].remove(member.id)
-        save_data(data)
+    data.get("whitelist", {}).pop(str(member.id), None)
+    save_data(data)
     await log_command(interaction, "unwhitelist", extra=f"Target: <@{member.id}>")
     await interaction.response.send_message(f"Unwhitelisted {member.mention}", ephemeral=True)
 
@@ -272,9 +320,10 @@ async def blame(interaction: discord.Interaction, member: discord.Member = None)
         return await interaction.response.send_message("Server only.", ephemeral=True)
     target = member or interaction.user
     await log_command(interaction, "blame", extra=f"Target: <@{target.id}>")
+    # public action, but ack stays hidden via followup if needed — send public then done
     await interaction.response.send_message(
         f"**{target.mention}** just raided this server. Report them.",
-        ephemeral=True
+        ephemeral=False
     )
 
 @bot.tree.command(name="ghostping", description="Ghost ping a user")
