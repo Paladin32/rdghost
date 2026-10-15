@@ -109,18 +109,6 @@ async def must_be_in_required_guild(interaction: discord.Interaction) -> bool:
     return True
 
 async def resolve_channel(interaction: discord.Interaction):
-    """Get a real TextChannel the bot can send to."""
-    ch = interaction.channel
-    if ch is not None and hasattr(ch, "send"):
-        # try bot cache first
-        cached = bot.get_channel(ch.id)
-        if cached is not None:
-            return cached
-        try:
-            return await bot.fetch_channel(ch.id)
-        except Exception as e:
-            print(f"fetch_channel failed: {e}")
-            return ch
     if interaction.channel_id:
         cached = bot.get_channel(interaction.channel_id)
         if cached is not None:
@@ -128,8 +116,33 @@ async def resolve_channel(interaction: discord.Interaction):
         try:
             return await bot.fetch_channel(interaction.channel_id)
         except Exception as e:
-            print(f"fetch_channel by id failed: {e}")
+            print(f"fetch_channel failed: {e}")
     return None
+
+async def public_send(interaction: discord.Interaction, content: str):
+    """
+    Send a public message in the current channel.
+    1) Try normal channel.send (bot is in guild)
+    2) Fallback: interaction followup (external app — works without bot in guild)
+    """
+    channel = await resolve_channel(interaction)
+    if channel is not None:
+        try:
+            msg = await channel.send(content)
+            data.setdefault("sent_messages", []).append({"channel_id": msg.channel.id, "message_id": msg.id})
+            save_data(data)
+            return msg
+        except Exception as e:
+            print(f"channel.send failed, falling back to followup: {e}")
+
+    # External app path — posts via interaction token, no guild membership needed
+    msg = await interaction.followup.send(content, ephemeral=False)
+    try:
+        data.setdefault("sent_messages", []).append({"channel_id": interaction.channel_id, "message_id": msg.id})
+        save_data(data)
+    except:
+        pass
+    return msg
 
 async def log_command(interaction: discord.Interaction, command_name: str, extra: str = None):
     channel = bot.get_channel(LOG_CHANNEL_ID)
@@ -187,25 +200,6 @@ async def log_whitelist(action: str, moderator: discord.User, target: discord.Me
         await channel.send(embed=embed)
     except Exception as e:
         print(f"whitelist log failed: {e}")
-
-async def track_message(msg):
-    data.setdefault("sent_messages", []).append({"channel_id": msg.channel.id, "message_id": msg.id})
-    save_data(data)
-
-async def safe_send(channel, content, delete_after=None):
-    if channel is None:
-        raise RuntimeError("No channel to send to")
-    try:
-        msg = await channel.send(content, delete_after=delete_after)
-        await track_message(msg)
-        return msg
-    except discord.HTTPException as e:
-        if e.status == 429:
-            await asyncio.sleep(getattr(e, "retry_after", 1.5) or 1.5)
-            msg = await channel.send(content, delete_after=delete_after)
-            await track_message(msg)
-            return msg
-        raise
 
 def build_invite_link():
     params = {
@@ -296,10 +290,6 @@ async def adspam(interaction: discord.Interaction):
     await interaction.response.send_message("running...", ephemeral=True)
     await log_command(interaction, "adspam")
 
-    channel = await resolve_channel(interaction)
-    if channel is None:
-        return await interaction.followup.send("Cannot access this channel. Is the bot in the server with Send Messages?", ephemeral=True)
-
     blocks = [
         f"## JOIN USSS\n## JOIN USSS\n## JOIN USSS\n\n{INVITE}\n\n**Slash**\n**Slash**\n2 Online\n3 Members\nEst. Oct 2026\n\n**Join**",
         f"## Server got fucked\n## JOIN USSS\n## JOIN USSS\n\n{INVITE}\n\n2 Online · 3 Members\nEst. Oct 2026",
@@ -310,14 +300,16 @@ async def adspam(interaction: discord.Interaction):
 
     try:
         for _ in range(20):
-            content = random.choice(blocks)
-            await safe_send(channel, content)
-            await asyncio.sleep(0.45)
+            await public_send(interaction, random.choice(blocks))
+            await asyncio.sleep(0.5)
     except Exception as e:
         print(f"adspam error: {e}")
-        await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
+        try:
+            await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
+        except:
+            pass
 
-@bot.tree.command(name="test", description="Test send + delete (checks external app / channel perms)")
+@bot.tree.command(name="test", description="Test send + delete (checks external app perms)")
 async def test(interaction: discord.Interaction):
     if not await must_be_in_required_guild(interaction):
         return
@@ -327,18 +319,14 @@ async def test(interaction: discord.Interaction):
     await interaction.response.send_message("testing...", ephemeral=True)
     await log_command(interaction, "test")
 
-    channel = await resolve_channel(interaction)
-    if channel is None:
-        return await interaction.followup.send(
-            "FAIL — cannot access channel. Bot must be **in this server** with **Send Messages** + **Manage Messages**.",
-            ephemeral=True
-        )
-
     try:
-        msg = await safe_send(channel, "bot online")
+        msg = await public_send(interaction, "bot online")
         await asyncio.sleep(1.5)
-        await msg.delete()
-        await interaction.followup.send("PASS — send + delete works.", ephemeral=True)
+        try:
+            await msg.delete()
+        except Exception as e:
+            print(f"delete failed (ok if external-only): {e}")
+        await interaction.followup.send("PASS — message sent.", ephemeral=True)
     except Exception as e:
         print(f"test error: {e}")
         await interaction.followup.send(f"FAIL — `{e}`", ephemeral=True)
@@ -391,12 +379,8 @@ async def blame(interaction: discord.Interaction, member: discord.Member = None)
     await interaction.response.send_message("sent", ephemeral=True)
     await log_command(interaction, "blame", extra=f"Target: <@{target.id}>")
 
-    channel = await resolve_channel(interaction)
-    if channel is None:
-        return await interaction.followup.send("Cannot access channel. Bot needs to be in the server.", ephemeral=True)
-
     try:
-        await safe_send(channel, f"**{target.mention}** just raided this server. Report them.")
+        await public_send(interaction, f"**{target.mention}** just raided this server. Report them.")
     except Exception as e:
         print(f"blame error: {e}")
         await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
@@ -412,14 +396,13 @@ async def ghostping(interaction: discord.Interaction, member: discord.Member):
     await interaction.response.send_message("sent", ephemeral=True)
     await log_command(interaction, "ghostping", extra=f"Target: <@{member.id}>")
 
-    channel = await resolve_channel(interaction)
-    if channel is None:
-        return await interaction.followup.send("Cannot access channel. Bot needs to be in the server.", ephemeral=True)
-
     try:
-        msg = await safe_send(channel, member.mention)
+        msg = await public_send(interaction, member.mention)
         await asyncio.sleep(0.6)
-        await msg.delete()
+        try:
+            await msg.delete()
+        except Exception as e:
+            print(f"ghostping delete failed: {e}")
     except Exception as e:
         print(f"ghostping error: {e}")
         await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
@@ -440,7 +423,10 @@ async def die(interaction: discord.Interaction):
     for entry in list(data.get("sent_messages", [])):
         ch = bot.get_channel(entry["channel_id"])
         if ch is None:
-            continue
+            try:
+                ch = await bot.fetch_channel(entry["channel_id"])
+            except:
+                continue
         try:
             msg = await ch.fetch_message(entry["message_id"])
             await msg.delete()
@@ -480,12 +466,8 @@ async def editspam(interaction: discord.Interaction, text: str):
     await interaction.response.send_message("running...", ephemeral=True)
     await log_command(interaction, "editspam", extra=f"Text: `{text[:200]}`")
 
-    channel = await resolve_channel(interaction)
-    if channel is None:
-        return await interaction.followup.send("Cannot access channel.", ephemeral=True)
-
     try:
-        msg = await safe_send(channel, text)
+        msg = await public_send(interaction, text)
         for i in range(12):
             try:
                 await msg.edit(content=f"{text} `{i}`")
@@ -511,19 +493,18 @@ async def spam(interaction: discord.Interaction, text: str = "@everyone"):
     view = StopSpamView(stop_event)
     await interaction.response.send_message("Spamming... click STOP to cancel.", view=view, ephemeral=True)
 
-    channel = await resolve_channel(interaction)
-    if channel is None:
-        return await interaction.followup.send("Cannot access channel.", ephemeral=True)
-
     try:
         for _ in range(40):
             if stop_event.is_set():
                 break
-            await safe_send(channel, text)
-            await asyncio.sleep(0.35)
+            await public_send(interaction, text)
+            await asyncio.sleep(0.45)
     except Exception as e:
         print(f"spam error: {e}")
-        await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
+        try:
+            await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
+        except:
+            pass
 
     try:
         await interaction.edit_original_response(content="Spam finished / stopped.", view=None)
