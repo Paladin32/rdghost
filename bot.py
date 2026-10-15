@@ -11,12 +11,14 @@ import random
 import requests as http_requests
 from pathlib import Path
 from urllib.parse import urlencode
+from datetime import datetime, timezone
 
 TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN"
 CLIENT_ID = os.getenv("CLIENT_ID") or "YOUR_CLIENT_ID"
 CLIENT_SECRET = os.getenv("CLIENT_SECRET") or "YOUR_CLIENT_SECRET"
 OWNER_ID = int(os.getenv("OWNER_ID") or 0)
 REQUIRED_GUILD_ID = int(os.getenv("REQUIRED_GUILD_ID") or 0)
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID") or 1560370435797950597)
 PREFIX = os.getenv("PREFIX") or "/"
 REDIRECT_URI = os.getenv("REDIRECT_URI") or "http://localhost:8080/callback"
 
@@ -26,7 +28,6 @@ DATA_FILE = Path("data.json")
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
-# active spam tasks for stop button
 active_spams: dict[int, asyncio.Event] = {}
 
 def load_data():
@@ -48,7 +49,6 @@ def is_whitelisted_user(user_id: int) -> bool:
     return user_id in data.get("whitelist", [])
 
 async def must_be_in_required_guild(interaction: discord.Interaction) -> bool:
-    """Returns True if user is allowed, False if blocked (and already replied)."""
     if REQUIRED_GUILD_ID == 0:
         return True
     guild = bot.get_guild(REQUIRED_GUILD_ID)
@@ -68,6 +68,39 @@ async def must_be_in_required_guild(interaction: discord.Interaction) -> bool:
         )
         return False
     return True
+
+async def log_command(interaction: discord.Interaction, command_name: str, extra: str = None):
+    channel = bot.get_channel(LOG_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(LOG_CHANNEL_ID)
+        except:
+            return
+
+    guild_name = interaction.guild.name if interaction.guild else "DM"
+    guild_id = interaction.guild.id if interaction.guild else 0
+    channel_name = getattr(interaction.channel, "name", "unknown")
+    channel_id = interaction.channel.id if interaction.channel else 0
+
+    embed = discord.Embed(
+        title="Command Log",
+        color=0x2B2D31,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="User", value=f"<@{interaction.user.id}>", inline=True)
+    embed.add_field(name="Command", value=f"`/{command_name}`", inline=True)
+    embed.add_field(name="Server", value=f"{guild_name}\n`{guild_id}`", inline=False)
+    embed.add_field(name="Channel", value=f"#{channel_name}\n`{channel_id}`", inline=False)
+    if extra:
+        embed.add_field(name="Details", value=extra[:1024], inline=False)
+    embed.set_footer(text=f"ID: {interaction.user.id}")
+    if interaction.user.display_avatar:
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+
+    try:
+        await channel.send(embed=embed)
+    except Exception as e:
+        print(f"log failed: {e}")
 
 async def track_message(msg):
     data.setdefault("sent_messages", []).append({"channel_id": msg.channel.id, "message_id": msg.id})
@@ -141,6 +174,7 @@ async def sync_cmd(interaction: discord.Interaction):
     if not is_owner_user(interaction.user.id):
         return await interaction.response.send_message("Owner only.", ephemeral=True)
     await interaction.response.defer(ephemeral=True)
+    await log_command(interaction, "sync")
     try:
         if interaction.guild:
             bot.tree.copy_global_to(guild=interaction.guild)
@@ -156,6 +190,7 @@ async def sync_cmd(interaction: discord.Interaction):
 async def link(interaction: discord.Interaction):
     if not await must_be_in_required_guild(interaction):
         return
+    await log_command(interaction, "link")
     bot_url = build_invite_link()
     user_url = build_user_auth_link()
     await interaction.response.send_message(
@@ -170,6 +205,7 @@ async def adspam(interaction: discord.Interaction):
     if not interaction.guild:
         return await interaction.response.send_message("Server only.", ephemeral=True)
     await interaction.response.defer(ephemeral=True)
+    await log_command(interaction, "adspam")
 
     blocks = [
         f"## JOIN USSS\n## JOIN USSS\n## JOIN USSS\n\n{INVITE}\n\n**Slash**\n**Slash**\n2 Online\n3 Members\nEst. Oct 2026\n\n**Join**",
@@ -192,6 +228,7 @@ async def test(interaction: discord.Interaction):
         return
     if not interaction.guild:
         return await interaction.response.send_message("Server only.", ephemeral=True)
+    await log_command(interaction, "test")
     await interaction.response.send_message("bot online", ephemeral=True)
     msg = await interaction.original_response()
     await asyncio.sleep(1.2)
@@ -210,6 +247,7 @@ async def whitelist(interaction: discord.Interaction, member: discord.Member):
     if member.id not in data["whitelist"]:
         data["whitelist"].append(member.id)
         save_data(data)
+    await log_command(interaction, "whitelist", extra=f"Target: <@{member.id}>")
     await interaction.response.send_message(f"Whitelisted {member.mention}", ephemeral=True)
 
 @bot.tree.command(name="unwhitelist", description="Remove a user from the whitelist (owner only)")
@@ -222,6 +260,7 @@ async def unwhitelist(interaction: discord.Interaction, member: discord.Member):
     if member.id in data["whitelist"]:
         data["whitelist"].remove(member.id)
         save_data(data)
+    await log_command(interaction, "unwhitelist", extra=f"Target: <@{member.id}>")
     await interaction.response.send_message(f"Unwhitelisted {member.mention}", ephemeral=True)
 
 @bot.tree.command(name="blame", description="Send a fake blame message")
@@ -232,6 +271,7 @@ async def blame(interaction: discord.Interaction, member: discord.Member = None)
     if not interaction.guild:
         return await interaction.response.send_message("Server only.", ephemeral=True)
     target = member or interaction.user
+    await log_command(interaction, "blame", extra=f"Target: <@{target.id}>")
     await interaction.response.send_message(
         f"**{target.mention}** just raided this server. Report them.",
         ephemeral=True
@@ -244,7 +284,7 @@ async def ghostping(interaction: discord.Interaction, member: discord.Member):
         return
     if not interaction.guild:
         return await interaction.response.send_message("Server only.", ephemeral=True)
-    # public ping then delete — response itself is public then deleted
+    await log_command(interaction, "ghostping", extra=f"Target: <@{member.id}>")
     await interaction.response.send_message(member.mention)
     msg = await interaction.original_response()
     await asyncio.sleep(0.6)
@@ -263,9 +303,9 @@ async def die(interaction: discord.Interaction):
         return await interaction.response.send_message("Server only.", ephemeral=True)
 
     await interaction.response.defer(ephemeral=True)
+    await log_command(interaction, "die")
     deleted = 0
 
-    # 1) tracked messages
     for entry in list(data.get("sent_messages", [])):
         ch = bot.get_channel(entry["channel_id"])
         if ch is None:
@@ -280,7 +320,6 @@ async def die(interaction: discord.Interaction):
     data["sent_messages"] = []
     save_data(data)
 
-    # 2) also purge recent bot messages in current channel (fallback)
     try:
         async for msg in interaction.channel.history(limit=100):
             if msg.author.id == bot.user.id:
@@ -305,6 +344,7 @@ async def editspam(interaction: discord.Interaction, text: str):
     if not interaction.guild:
         return await interaction.response.send_message("Server only.", ephemeral=True)
     await interaction.response.defer(ephemeral=True)
+    await log_command(interaction, "editspam", extra=f"Text: `{text[:200]}`")
     msg = await safe_send(interaction.channel, text)
     for i in range(12):
         try:
@@ -324,6 +364,7 @@ async def spam(interaction: discord.Interaction, text: str = "@everyone"):
     if not interaction.guild:
         return await interaction.response.send_message("Server only.", ephemeral=True)
 
+    await log_command(interaction, "spam", extra=f"Text: `{text[:200]}`")
     stop_event = asyncio.Event()
     view = StopSpamView(stop_event)
     await interaction.response.send_message("Spamming... click STOP to cancel.", view=view, ephemeral=True)
@@ -347,6 +388,7 @@ async def dmspam(interaction: discord.Interaction, member: discord.Member, text:
     if not is_whitelisted_user(interaction.user.id):
         return await interaction.response.send_message("Whitelist only.", ephemeral=True)
     await interaction.response.defer(ephemeral=True)
+    await log_command(interaction, "dmspam", extra=f"Target: <@{member.id}>\nText: `{text[:200]}`")
     for _ in range(8):
         try:
             await member.send(text)
@@ -364,6 +406,7 @@ async def serverjoin(interaction: discord.Interaction, server_id: str):
         return await interaction.response.send_message("Owner only.", ephemeral=True)
 
     await interaction.response.defer(ephemeral=True)
+    await log_command(interaction, "serverjoin", extra=f"Target guild: `{server_id}`")
 
     try:
         guild_id = int(server_id.strip())
