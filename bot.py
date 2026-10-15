@@ -59,29 +59,58 @@ async def safe_send(channel, content, delete_after=None):
             return msg
         raise
 
-def build_oauth_link():
+def build_invite_link():
+    # clean bot invite (no code flow) — forces applications.commands
     params = {
         "client_id": CLIENT_ID,
         "permissions": "8",
         "scope": "bot applications.commands",
-        "redirect_uri": REDIRECT_URI,
-        "response_type": "code",
     }
     return f"https://discord.com/api/oauth2/authorize?{urlencode(params)}"
 
 @bot.event
 async def on_ready():
     print(f"logged in as {bot.user} | {bot.user.id}")
+    print(f"in {len(bot.guilds)} guild(s)")
+    for g in bot.guilds:
+        print(f"  - {g.name} ({g.id})")
+
+    # 1) global sync
     try:
         synced = await bot.tree.sync()
-        print(f"synced {len(synced)} slash command(s)")
+        print(f"global sync: {len(synced)} command(s)")
     except Exception as e:
-        print(f"sync failed: {e}")
+        print(f"global sync failed: {e}")
 
-@bot.tree.command(name="link", description="Send the bot authorize / install link")
+    # 2) force guild sync (instant appearance)
+    for g in bot.guilds:
+        try:
+            bot.tree.copy_global_to(guild=g)
+            synced = await bot.tree.sync(guild=g)
+            print(f"guild sync [{g.name}]: {len(synced)} command(s)")
+        except Exception as e:
+            print(f"guild sync failed [{g.name}]: {e}")
+
+@bot.tree.command(name="sync", description="Force re-sync slash commands (owner only)")
+async def sync_cmd(interaction: discord.Interaction):
+    if not is_owner_user(interaction.user.id):
+        return await interaction.response.send_message("Owner only.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    try:
+        if interaction.guild:
+            bot.tree.copy_global_to(guild=interaction.guild)
+            synced = await bot.tree.sync(guild=interaction.guild)
+            await interaction.followup.send(f"Synced {len(synced)} commands to this server.", ephemeral=True)
+        else:
+            synced = await bot.tree.sync()
+            await interaction.followup.send(f"Global sync: {len(synced)} commands.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"Sync error: {e}", ephemeral=True)
+
+@bot.tree.command(name="link", description="Send the bot invite / install link")
 async def link(interaction: discord.Interaction):
-    url = build_oauth_link()
-    await interaction.response.send_message(f"**Authorize / Install the bot:**\n{url}", ephemeral=False)
+    url = build_invite_link()
+    await interaction.response.send_message(f"**Invite the bot (with slash commands):**\n{url}")
 
 @bot.tree.command(name="adspam", description="Flood the channel with ad-style messages")
 async def adspam(interaction: discord.Interaction):
