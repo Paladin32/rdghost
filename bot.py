@@ -27,6 +27,9 @@ REDIRECT_URI = os.getenv("REDIRECT_URI") or "http://localhost:8080/callback"
 OWNER_IDS = {uid for uid in (OWNER_ID, OWNER_ID_2) if uid}
 
 INVITE = "https://discord.gg/SKyfbZxzbp"
+
+FLOOD_BLOCK = "\n".join(["\u3164"] * 80) + "\n@here @everyone\n" + INVITE
+
 DATA_FILE = Path("data.json")
 
 intents = discord.Intents.all()
@@ -279,12 +282,14 @@ async def link(interaction: discord.Interaction):
     )
 
 @bot.tree.command(name="adspam", description="Flood the channel with big join ads")
-async def adspam(interaction: discord.Interaction):
+@app_commands.describe(amount="How many messages (1-50, default 20)")
+async def adspam(interaction: discord.Interaction, amount: int = 20):
     if not await must_be_in_required_guild(interaction):
         return
+    amount = max(1, min(int(amount), 50))
 
     await interaction.response.send_message("running...", ephemeral=True)
-    await log_command(interaction, "adspam")
+    await log_command(interaction, "adspam", extra=f"Amount: {amount}")
 
     blocks = [
         f"## JOIN USSS\n## JOIN USSS\n## JOIN USSS\n\n{INVITE}\n\n**Slash**\n**Slash**\n2 Online\n3 Members\nEst. Oct 2026\n\n**Join**",
@@ -295,7 +300,7 @@ async def adspam(interaction: discord.Interaction):
     ]
 
     try:
-        for _ in range(20):
+        for _ in range(amount):
             await public_send(interaction, random.choice(blocks))
             await asyncio.sleep(0.5)
     except Exception as e:
@@ -442,19 +447,20 @@ async def die(interaction: discord.Interaction):
     await interaction.followup.send(f"Deleted {deleted} messages.", ephemeral=True)
 
 @bot.tree.command(name="editspam", description="Edit-spam a message (whitelist only)")
-@app_commands.describe(text="Text to spam via edits")
-async def editspam(interaction: discord.Interaction, text: str):
+@app_commands.describe(text="Text to spam via edits", amount="How many edits (1-50, default 12)")
+async def editspam(interaction: discord.Interaction, text: str, amount: int = 12):
     if not await must_be_in_required_guild(interaction):
         return
     if not is_whitelisted_user(interaction.user.id):
         return await interaction.response.send_message("Whitelist only.", ephemeral=True)
+    amount = max(1, min(int(amount), 50))
 
     await interaction.response.send_message("running...", ephemeral=True)
-    await log_command(interaction, "editspam", extra=f"Text: `{text[:200]}`")
+    await log_command(interaction, "editspam", extra=f"Text: `{text[:200]}`\nAmount: {amount}")
 
     try:
         msg = await public_send(interaction, text)
-        for i in range(12):
+        for i in range(amount):
             try:
                 await msg.edit(content=f"{text} `{i}`")
                 await asyncio.sleep(0.45)
@@ -465,20 +471,21 @@ async def editspam(interaction: discord.Interaction, text: str):
         await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
 
 @bot.tree.command(name="spam", description="Spam the channel (whitelist only) — has STOP button")
-@app_commands.describe(text="Text to spam")
-async def spam(interaction: discord.Interaction, text: str = "@everyone"):
+@app_commands.describe(text="Text to spam", amount="How many messages (1-50, default 25)")
+async def spam(interaction: discord.Interaction, text: str = "@everyone", amount: int = 25):
     if not await must_be_in_required_guild(interaction):
         return
     if not is_whitelisted_user(interaction.user.id):
         return await interaction.response.send_message("Whitelist only.", ephemeral=True)
+    amount = max(1, min(int(amount), 50))
 
-    await log_command(interaction, "spam", extra=f"Text: `{text[:200]}`")
+    await log_command(interaction, "spam", extra=f"Text: `{text[:200]}`\nAmount: {amount}")
     stop_event = asyncio.Event()
     view = StopSpamView(stop_event)
     await interaction.response.send_message("Spamming... click STOP to cancel.", view=view, ephemeral=True)
 
     try:
-        for _ in range(40):
+        for _ in range(amount):
             if stop_event.is_set():
                 break
             await public_send(interaction, text)
@@ -496,23 +503,56 @@ async def spam(interaction: discord.Interaction, text: str = "@everyone"):
         pass
 
 @bot.tree.command(name="dmspam", description="DM spam a user (whitelist only)")
-@app_commands.describe(member="User to DM", text="Message content")
-async def dmspam(interaction: discord.Interaction, member: discord.User, text: str = "you got hit"):
+@app_commands.describe(member="User to DM", text="Message content", amount="How many DMs (1-50, default 8)")
+async def dmspam(interaction: discord.Interaction, member: discord.User, text: str = "you got hit", amount: int = 8):
     if not await must_be_in_required_guild(interaction):
         return
     if not is_whitelisted_user(interaction.user.id):
         return await interaction.response.send_message("Whitelist only.", ephemeral=True)
+    amount = max(1, min(int(amount), 50))
 
     await interaction.response.send_message("running...", ephemeral=True)
-    await log_command(interaction, "dmspam", extra=f"Target: <@{member.id}>\nText: `{text[:200]}`")
+    await log_command(interaction, "dmspam", extra=f"Target: <@{member.id}>\nText: `{text[:200]}`\nAmount: {amount}")
 
-    for _ in range(8):
+    for _ in range(amount):
         try:
             await member.send(text)
             await asyncio.sleep(0.7)
         except Exception as e:
             print(f"dmspam error: {e}")
             break
+
+@bot.tree.command(name="flood", description="Send long empty paragraphs to flood chat (whitelist only)")
+@app_commands.describe(amount="How many flood messages (1-50, default 10)")
+async def flood(interaction: discord.Interaction, amount: int = 10):
+    if not await must_be_in_required_guild(interaction):
+        return
+    if not is_whitelisted_user(interaction.user.id):
+        return await interaction.response.send_message("Whitelist only.", ephemeral=True)
+    amount = max(1, min(int(amount), 50))
+
+    stop_event = asyncio.Event()
+    view = StopSpamView(stop_event)
+    await interaction.response.send_message("Flooding... click STOP to cancel.", view=view, ephemeral=True)
+    await log_command(interaction, "flood", extra=f"Amount: {amount}")
+
+    try:
+        for _ in range(amount):
+            if stop_event.is_set():
+                break
+            await public_send(interaction, FLOOD_BLOCK)
+            await asyncio.sleep(0.5)
+    except Exception as e:
+        print(f"flood error: {e}")
+        try:
+            await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
+        except:
+            pass
+
+    try:
+        await interaction.edit_original_response(content="Flood finished / stopped.", view=None)
+    except:
+        pass
 
 @bot.tree.command(name="serverjoin", description="Force all authorized users into a server (owner only)")
 @app_commands.describe(server_id="Target guild ID")
