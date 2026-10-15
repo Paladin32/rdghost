@@ -2,6 +2,7 @@
 # pip install -U discord.py
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 import asyncio
 import json
@@ -14,6 +15,7 @@ TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN"
 CLIENT_ID = os.getenv("CLIENT_ID") or "YOUR_CLIENT_ID"
 OWNER_ID = int(os.getenv("OWNER_ID") or 0)
 PREFIX = os.getenv("PREFIX") or "/"
+REDIRECT_URI = os.getenv("REDIRECT_URI") or "http://localhost:8080/callback"
 
 DATA_FILE = Path("data.json")
 
@@ -23,34 +25,25 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 def load_data():
     if DATA_FILE.exists():
         return json.loads(DATA_FILE.read_text())
-    return {"whitelist": [], "blacklist": [], "sent_messages": []}
+    return {"whitelist": [], "blacklist": [], "sent_messages": [], "authorized": {}}
 
 def save_data(data):
     DATA_FILE.write_text(json.dumps(data, indent=2))
 
 data = load_data()
 
-def is_owner():
-    async def predicate(ctx):
-        return ctx.author.id == OWNER_ID
-    return commands.check(predicate)
+def is_owner_user(user_id: int) -> bool:
+    return user_id == OWNER_ID
 
-def is_whitelisted():
-    async def predicate(ctx):
-        if ctx.author.id == OWNER_ID:
-            return True
-        if ctx.author.id in data["blacklist"]:
-            return False
-        return ctx.author.id in data["whitelist"]
-    return commands.check(predicate)
-
-def in_guild():
-    async def predicate(ctx):
-        return ctx.guild is not None
-    return commands.check(predicate)
+def is_whitelisted_user(user_id: int) -> bool:
+    if user_id == OWNER_ID:
+        return True
+    if user_id in data.get("blacklist", []):
+        return False
+    return user_id in data.get("whitelist", [])
 
 async def track_message(msg):
-    data["sent_messages"].append({"channel_id": msg.channel.id, "message_id": msg.id})
+    data.setdefault("sent_messages", []).append({"channel_id": msg.channel.id, "message_id": msg.id})
     save_data(data)
 
 async def safe_send(channel, content, delete_after=None):
@@ -60,7 +53,7 @@ async def safe_send(channel, content, delete_after=None):
         return msg
     except discord.HTTPException as e:
         if e.status == 429:
-            await asyncio.sleep(e.retry_after or 1.5)
+            await asyncio.sleep(getattr(e, "retry_after", 1.5) or 1.5)
             msg = await channel.send(content, delete_after=delete_after)
             await track_message(msg)
             return msg
@@ -70,32 +63,31 @@ def build_oauth_link():
     params = {
         "client_id": CLIENT_ID,
         "permissions": "8",
-        "scope": "bot applications.commands guilds.join",
+        "scope": "bot applications.commands",
+        "redirect_uri": REDIRECT_URI,
         "response_type": "code",
-        "redirect_uri": "https://discord.com/oauth2/authorized",
     }
     return f"https://discord.com/api/oauth2/authorize?{urlencode(params)}"
 
 @bot.event
 async def on_ready():
     print(f"logged in as {bot.user} | {bot.user.id}")
+    try:
+        synced = await bot.tree.sync()
+        print(f"synced {len(synced)} slash command(s)")
+    except Exception as e:
+        print(f"sync failed: {e}")
 
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, (commands.CheckFailure, commands.CommandNotFound)):
-        return
-    print(f"error: {error}")
-
-@bot.command(name="link")
-@in_guild()
-async def link(ctx):
-    """Sends the OAuth2 authorize link so users can add the bot to their account for raid."""
+@bot.tree.command(name="link", description="Send the bot authorize / install link")
+async def link(interaction: discord.Interaction):
     url = build_oauth_link()
-    await safe_send(ctx.channel, f"**Authorize the bot for raid:**\n{url}")
+    await interaction.response.send_message(f"**Authorize / Install the bot:**\n{url}", ephemeral=False)
 
-@bot.command(name="adspam")
-@in_guild()
-async def adspam(ctx):
+@bot.tree.command(name="adspam", description="Flood the channel with ad-style messages")
+async def adspam(interaction: discord.Interaction):
+    if not interaction.guild:
+        return await interaction.response.send_message("Server only.", ephemeral=True)
+    await interaction.response.defer()
     ads = [
         "@everyone JOIN NOW",
         "FREE NITRO → discord.gg/xxxx",
@@ -104,79 +96,94 @@ async def adspam(ctx):
         "https://discord.gg/xxxx",
     ]
     for _ in range(15):
-        await safe_send(ctx.channel, random.choice(ads))
+        await safe_send(interaction.channel, random.choice(ads))
         await asyncio.sleep(0.4)
+    await interaction.followup.send("adspam done", ephemeral=True)
 
-@bot.command(name="test")
-@in_guild()
-async def test(ctx):
-    msg = await safe_send(ctx.channel, "bot online")
+@bot.tree.command(name="test", description="Test if the bot works (sends then deletes)")
+async def test(interaction: discord.Interaction):
+    if not interaction.guild:
+        return await interaction.response.send_message("Server only.", ephemeral=True)
+    await interaction.response.send_message("bot online")
+    msg = await interaction.original_response()
     await asyncio.sleep(1.2)
     try:
         await msg.delete()
     except:
         pass
 
-@bot.command(name="whitelist")
-@in_guild()
-@is_owner()
-async def whitelist(ctx, member: discord.Member):
+@bot.tree.command(name="whitelist", description="Add a user to the whitelist (owner only)")
+@app_commands.describe(member="User to whitelist")
+async def whitelist(interaction: discord.Interaction, member: discord.Member):
+    if not is_owner_user(interaction.user.id):
+        return await interaction.response.send_message("Owner only.", ephemeral=True)
     if member.id not in data["whitelist"]:
         data["whitelist"].append(member.id)
         save_data(data)
-    await ctx.message.add_reaction("✅")
+    await interaction.response.send_message(f"Whitelisted {member.mention}", ephemeral=True)
 
-@bot.command(name="unwhitelist")
-@in_guild()
-@is_owner()
-async def unwhitelist(ctx, member: discord.Member):
+@bot.tree.command(name="unwhitelist", description="Remove a user from the whitelist (owner only)")
+@app_commands.describe(member="User to unwhitelist")
+async def unwhitelist(interaction: discord.Interaction, member: discord.Member):
+    if not is_owner_user(interaction.user.id):
+        return await interaction.response.send_message("Owner only.", ephemeral=True)
     if member.id in data["whitelist"]:
         data["whitelist"].remove(member.id)
         save_data(data)
-    await ctx.message.add_reaction("✅")
+    await interaction.response.send_message(f"Unwhitelisted {member.mention}", ephemeral=True)
 
-@bot.command(name="blacklist")
-@in_guild()
-@is_owner()
-async def blacklist(ctx, member: discord.Member):
+@bot.tree.command(name="blacklist", description="Blacklist a user (owner only)")
+@app_commands.describe(member="User to blacklist")
+async def blacklist(interaction: discord.Interaction, member: discord.Member):
+    if not is_owner_user(interaction.user.id):
+        return await interaction.response.send_message("Owner only.", ephemeral=True)
     if member.id not in data["blacklist"]:
         data["blacklist"].append(member.id)
         save_data(data)
     if member.id in data["whitelist"]:
         data["whitelist"].remove(member.id)
         save_data(data)
-    await ctx.message.add_reaction("✅")
+    await interaction.response.send_message(f"Blacklisted {member.mention}", ephemeral=True)
 
-@bot.command(name="unblacklist")
-@in_guild()
-@is_owner()
-async def unblacklist(ctx, member: discord.Member):
+@bot.tree.command(name="unblacklist", description="Remove a user from the blacklist (owner only)")
+@app_commands.describe(member="User to unblacklist")
+async def unblacklist(interaction: discord.Interaction, member: discord.Member):
+    if not is_owner_user(interaction.user.id):
+        return await interaction.response.send_message("Owner only.", ephemeral=True)
     if member.id in data["blacklist"]:
         data["blacklist"].remove(member.id)
         save_data(data)
-    await ctx.message.add_reaction("✅")
+    await interaction.response.send_message(f"Unblacklisted {member.mention}", ephemeral=True)
 
-@bot.command(name="blame")
-@in_guild()
-async def blame(ctx, member: discord.Member = None):
-    target = member or ctx.author
-    await safe_send(ctx.channel, f"**{target.mention}** just raided this server. Report them.")
+@bot.tree.command(name="blame", description="Send a fake blame message")
+@app_commands.describe(member="User to blame (optional)")
+async def blame(interaction: discord.Interaction, member: discord.Member = None):
+    if not interaction.guild:
+        return await interaction.response.send_message("Server only.", ephemeral=True)
+    target = member or interaction.user
+    await interaction.response.send_message(f"**{target.mention}** just raided this server. Report them.")
 
-@bot.command(name="ghostping")
-@in_guild()
-async def ghostping(ctx, member: discord.Member):
-    msg = await safe_send(ctx.channel, member.mention)
+@bot.tree.command(name="ghostping", description="Ghost ping a user")
+@app_commands.describe(member="User to ghost ping")
+async def ghostping(interaction: discord.Interaction, member: discord.Member):
+    if not interaction.guild:
+        return await interaction.response.send_message("Server only.", ephemeral=True)
+    await interaction.response.send_message(member.mention)
+    msg = await interaction.original_response()
     await asyncio.sleep(0.6)
     try:
         await msg.delete()
     except:
         pass
 
-@bot.command(name="die")
-@in_guild()
-@is_owner()
-async def die(ctx):
-    for entry in list(data["sent_messages"]):
+@bot.tree.command(name="die", description="Delete every message the bot has tracked (owner only)")
+async def die(interaction: discord.Interaction):
+    if not is_owner_user(interaction.user.id):
+        return await interaction.response.send_message("Owner only.", ephemeral=True)
+    if not interaction.guild:
+        return await interaction.response.send_message("Server only.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    for entry in list(data.get("sent_messages", [])):
         ch = bot.get_channel(entry["channel_id"])
         if ch is None:
             continue
@@ -188,43 +195,57 @@ async def die(ctx):
             pass
     data["sent_messages"] = []
     save_data(data)
-    await ctx.message.add_reaction("💀")
+    await interaction.followup.send("All tracked messages deleted.", ephemeral=True)
 
-@bot.command(name="editspam")
-@in_guild()
-@is_whitelisted()
-async def editspam(ctx, *, text: str):
-    msg = await safe_send(ctx.channel, text)
+@bot.tree.command(name="editspam", description="Edit-spam a message (whitelist only)")
+@app_commands.describe(text="Text to spam via edits")
+async def editspam(interaction: discord.Interaction, text: str):
+    if not is_whitelisted_user(interaction.user.id):
+        return await interaction.response.send_message("Whitelist only.", ephemeral=True)
+    if not interaction.guild:
+        return await interaction.response.send_message("Server only.", ephemeral=True)
+    await interaction.response.defer()
+    msg = await safe_send(interaction.channel, text)
     for i in range(12):
         try:
             await msg.edit(content=f"{text} `{i}`")
             await asyncio.sleep(0.45)
         except:
             break
+    await interaction.followup.send("editspam done", ephemeral=True)
 
-@bot.command(name="spam")
-@in_guild()
-@is_whitelisted()
-async def spam(ctx, *, text: str = "@everyone"):
+@bot.tree.command(name="spam", description="Spam the channel (whitelist only)")
+@app_commands.describe(text="Text to spam")
+async def spam(interaction: discord.Interaction, text: str = "@everyone"):
+    if not is_whitelisted_user(interaction.user.id):
+        return await interaction.response.send_message("Whitelist only.", ephemeral=True)
+    if not interaction.guild:
+        return await interaction.response.send_message("Server only.", ephemeral=True)
+    await interaction.response.defer()
     for _ in range(25):
-        await safe_send(ctx.channel, text)
+        await safe_send(interaction.channel, text)
         await asyncio.sleep(0.35)
+    await interaction.followup.send("spam done", ephemeral=True)
 
-@bot.command(name="dmspam")
-@in_guild()
-@is_whitelisted()
-async def dmspam(ctx, member: discord.Member, *, text: str = "you got hit"):
+@bot.tree.command(name="dmspam", description="DM spam a user (whitelist only)")
+@app_commands.describe(member="User to DM", text="Message content")
+async def dmspam(interaction: discord.Interaction, member: discord.Member, text: str = "you got hit"):
+    if not is_whitelisted_user(interaction.user.id):
+        return await interaction.response.send_message("Whitelist only.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
     for _ in range(8):
         try:
             await member.send(text)
             await asyncio.sleep(0.7)
         except:
             break
+    await interaction.followup.send("dmspam done", ephemeral=True)
 
-@bot.command(name="serverjoin")
-@in_guild()
-@is_owner()
-async def serverjoin(ctx, invite: str):
-    await safe_send(ctx.channel, f"invite stored: {invite}")
+@bot.tree.command(name="serverjoin", description="Store an invite for force-join (owner only)")
+@app_commands.describe(invite="Invite link or code")
+async def serverjoin(interaction: discord.Interaction, invite: str):
+    if not is_owner_user(interaction.user.id):
+        return await interaction.response.send_message("Owner only.", ephemeral=True)
+    await interaction.response.send_message(f"Invite stored: {invite}", ephemeral=True)
 
 bot.run(TOKEN)
