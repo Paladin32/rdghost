@@ -319,15 +319,23 @@ async def sync_cmd(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     await log_command(interaction, "sync")
     try:
-        if interaction.guild:
-            bot.tree.copy_global_to(guild=interaction.guild)
-            synced = await bot.tree.sync(guild=interaction.guild)
-            await interaction.followup.send(f"Synced {len(synced)} commands to this server.", ephemeral=True)
-        else:
-            synced = await bot.tree.sync()
-            await interaction.followup.send(f"Global sync: {len(synced)} commands.", ephemeral=True)
+        synced_global = await bot.tree.sync()
+        lines = [f"Global: **{len(synced_global)}** commands."]
+        ok, fail = 0, 0
+        for g in list(bot.guilds):
+            try:
+                bot.tree.copy_global_to(guild=g)
+                await bot.tree.sync(guild=g)
+                ok += 1
+            except Exception as e:
+                fail += 1
+                print(f"sync guild {g.name} ({g.id}): {e}")
+        lines.append(f"Guilds: **{ok}** ok, **{fail}** fail.")
+        names = [c.name for c in bot.tree.get_commands()]
+        lines.append(f"Tree: `{', '.join(sorted(names))}`")
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
     except Exception as e:
-        await interaction.followup.send(f"Sync error: {e}", ephemeral=True)
+        await interaction.followup.send(f"Sync error: `{e}`", ephemeral=True)
 
 @bot.tree.command(name="link", description="Send the bot invite / user auth link")
 async def link(interaction: discord.Interaction):
@@ -462,34 +470,45 @@ async def ghostping(interaction: discord.Interaction, member: discord.User):
         await log_error("ghostping", e)
         await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
 
-# --- load remaining commands + panels ---
+# --- load remaining commands + panels (paths relative to this file) ---
+_BASE = Path(__file__).resolve().parent
+
 try:
-    with open("extra_cmds.py", encoding="utf-8") as _f:
-        exec(_f.read(), globals())
+    _extra = (_BASE / "extra_cmds.py").read_text(encoding="utf-8")
+    exec(_extra, globals())
+    print("extra_cmds loaded")
 except Exception as _e:
     print(f"extra_cmds load failed: {_e}")
 
 try:
-    import status_panel
-    status_panel.setup_status(
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location("status_panel", _BASE / "status_panel.py")
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    _mod.setup_status(
         bot,
         is_owner_user=is_owner_user,
         log_command=log_command,
         data=data,
         save_data=save_data,
     )
+    print("status_panel loaded")
 except Exception as _e:
     print(f"status_panel load failed: {_e}")
 
 try:
-    import webhook_cmd
-    webhook_cmd.setup(
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location("webhook_cmd", _BASE / "webhook_cmd.py")
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    _mod.setup(
         bot,
         must_be_in_required_guild=must_be_in_required_guild,
         is_whitelisted_user=is_whitelisted_user,
         log_command=log_command,
         log_error=log_error,
     )
+    print("webhook_cmd loaded")
 except Exception as _e:
     print(f"webhook_cmd load failed: {_e}")
 
