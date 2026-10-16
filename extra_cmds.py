@@ -89,12 +89,15 @@ async def spam(interaction: discord.Interaction, text: str, amount: int = 25):
 
     sent = 0
     try:
-        for _ in range(amount):
+        for i in range(amount):
             if stop_event.is_set():
                 break
-            await public_send(interaction, text)
-            sent += 1
-            await asyncio.sleep(0.4)
+            try:
+                await public_send(interaction, text, track=False)
+                sent += 1
+            except Exception as e:
+                print(f"spam send {i+1}/{amount} failed: {e}")
+            await asyncio.sleep(0.35)
     except Exception as e:
         await log_error("spam", e)
 
@@ -151,7 +154,7 @@ async def flood(interaction: discord.Interaction, amount: int = 10):
 
     try:
         for _ in range(amount):
-            await public_send(interaction, FLOOD_BLOCK)
+            await public_send(interaction, FLOOD_BLOCK, track=False)
             await asyncio.sleep(0.45)
     except Exception as e:
         await log_error("flood", e)
@@ -184,7 +187,7 @@ async def roast(interaction: discord.Interaction, member: discord.User, amount: 
 
     try:
         for _ in range(amount):
-            await public_send(interaction, random.choice(roasts))
+            await public_send(interaction, random.choice(roasts), track=False)
             await asyncio.sleep(0.45)
     except Exception as e:
         await log_error("roast", e)
