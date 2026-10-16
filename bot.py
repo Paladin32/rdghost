@@ -157,37 +157,86 @@ async def public_send(interaction: discord.Interaction, content: str):
     return msg
 
 async def log_command(interaction: discord.Interaction, command_name: str, extra: str = None):
+    """Log every command use — any guild, DM, or external/user-install app context."""
     channel = bot.get_channel(LOG_CHANNEL_ID)
     if channel is None:
         try:
             channel = await bot.fetch_channel(LOG_CHANNEL_ID)
-        except:
+        except Exception as e:
+            print(f"log_command: cannot reach log channel {LOG_CHANNEL_ID}: {e}")
             return
 
-    guild_name = interaction.guild.name if interaction.guild else "DM"
-    guild_id = interaction.guild.id if interaction.guild else 0
-    channel_name = getattr(interaction.channel, "name", "unknown")
-    channel_id = interaction.channel.id if interaction.channel else 0
+    guild = interaction.guild
+    guild_id = interaction.guild_id
+    channel_obj = interaction.channel
+    channel_id = interaction.channel_id
+
+    if guild is not None:
+        guild_name = guild.name
+        context_label = "Guild"
+    elif guild_id:
+        guild_name = f"(partial) id={guild_id}"
+        context_label = "Guild (external/partial)"
+    else:
+        guild_name = "DM / User Install"
+        context_label = "DM / External App"
+        guild_id = 0
+
+    channel_name = getattr(channel_obj, "name", None) or getattr(channel_obj, "recipient", None)
+    if channel_name is None:
+        channel_name = "unknown"
+    else:
+        channel_name = str(channel_name)
+
+    ctx_bits = []
+    try:
+        ctx = interaction.context
+        if ctx is not None:
+            if getattr(ctx, "guild", False) or getattr(ctx, "guild_install", False):
+                ctx_bits.append("guild_install")
+            if getattr(ctx, "private_channel", False) or getattr(ctx, "user_install", False):
+                ctx_bits.append("user_install")
+            if getattr(ctx, "dm_channel", False):
+                ctx_bits.append("dm")
+    except Exception:
+        pass
+    try:
+        ai = getattr(interaction, "authorizing_integration_owners", None)
+        if ai:
+            ctx_bits.append(f"auth_owners={dict(ai)}")
+    except Exception:
+        pass
 
     embed = discord.Embed(
         title="Command Log",
         color=0x2B2D31,
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(name="User", value=f"<@{interaction.user.id}>", inline=True)
+    embed.add_field(name="User", value=f"<@{interaction.user.id}>\n`{interaction.user}`", inline=True)
     embed.add_field(name="Command", value=f"`/{command_name}`", inline=True)
-    embed.add_field(name="Server", value=f"{guild_name}\n`{guild_id}`", inline=False)
-    embed.add_field(name="Channel", value=f"#{channel_name}\n`{channel_id}`", inline=False)
+    embed.add_field(name="Context", value=context_label, inline=True)
+    embed.add_field(
+        name="Server",
+        value=f"{guild_name}\n`{guild_id}`",
+        inline=False,
+    )
+    embed.add_field(
+        name="Channel",
+        value=f"#{channel_name}\n`{channel_id}`",
+        inline=False,
+    )
+    if ctx_bits:
+        embed.add_field(name="Install / Flags", value=", ".join(ctx_bits)[:1024], inline=False)
     if extra:
-        embed.add_field(name="Details", value=extra[:1024], inline=False)
-    embed.set_footer(text=f"ID: {interaction.user.id}")
+        embed.add_field(name="Details", value=str(extra)[:1024], inline=False)
+    embed.set_footer(text=f"User ID: {interaction.user.id}")
     if interaction.user.display_avatar:
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
 
     try:
         await channel.send(embed=embed)
     except Exception as e:
-        print(f"log failed: {e}")
+        print(f"log_command send failed: {e}")
 
 async def log_whitelist(action: str, moderator: discord.User, target: discord.User, minutes: int = None):
     channel = bot.get_channel(WHITELIST_LOG_CHANNEL_ID)
