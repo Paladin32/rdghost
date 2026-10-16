@@ -21,6 +21,8 @@ OWNER_ID_2 = int(os.getenv("OWNER_ID_2") or 0)
 REQUIRED_GUILD_ID = int(os.getenv("REQUIRED_GUILD_ID") or 0)
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID") or 1560370435797950597)
 WHITELIST_LOG_CHANNEL_ID = int(os.getenv("WHITELIST_LOG_CHANNEL_ID") or 1560375659501719623)
+ERROR_GUILD_ID = int(os.getenv("ERROR_GUILD_ID") or 1560255647608475750)
+ERROR_LOG_CHANNEL_NAME = os.getenv("ERROR_LOG_CHANNEL_NAME") or "errors-logs"
 PREFIX = os.getenv("PREFIX") or "/"
 REDIRECT_URI = os.getenv("REDIRECT_URI") or "http://localhost:8080/callback"
 
@@ -212,6 +214,50 @@ async def log_whitelist(action: str, moderator: discord.User, target: discord.Us
     except Exception as e:
         print(f"whitelist log failed: {e}")
 
+def scramble_text(text: str) -> str:
+    """Shuffle letters of each word, keep spaces/punctuation positions roughly."""
+    chars = list(text)
+    letters = [(i, c) for i, c in enumerate(chars) if c.isalpha()]
+    if len(letters) < 2:
+        return text
+    indices = [i for i, _ in letters]
+    pool = [c for _, c in letters]
+    random.shuffle(pool)
+    for idx, ch in zip(indices, pool):
+        chars[idx] = ch
+    return "".join(chars)
+
+async def log_error(source: str, error: Exception | str, extra: str = None):
+    """Send every error to #errors-logs in the configured guild."""
+    guild = bot.get_guild(ERROR_GUILD_ID)
+    if guild is None:
+        print(f"log_error: guild {ERROR_GUILD_ID} not found")
+        return
+    channel = discord.utils.get(guild.text_channels, name=ERROR_LOG_CHANNEL_NAME)
+    if channel is None:
+        for ch in guild.text_channels:
+            if ch.name.lower() == ERROR_LOG_CHANNEL_NAME.lower():
+                channel = ch
+                break
+    if channel is None:
+        print(f"log_error: channel '{ERROR_LOG_CHANNEL_NAME}' not found in guild {ERROR_GUILD_ID}")
+        return
+
+    err_str = str(error)
+    embed = discord.Embed(
+        title="Error Log",
+        color=0xED4245,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="Source", value=f"`{source}`", inline=True)
+    embed.add_field(name="Error", value=f"```{err_str[:900]}```", inline=False)
+    if extra:
+        embed.add_field(name="Details", value=extra[:1024], inline=False)
+    try:
+        await channel.send(embed=embed)
+    except Exception as e:
+        print(f"log_error send failed: {e}")
+
 def build_invite_link():
     params = {
         "client_id": CLIENT_ID,
@@ -315,7 +361,7 @@ async def adspam(interaction: discord.Interaction, amount: int = 20):
             await public_send(interaction, random.choice(blocks))
             await asyncio.sleep(0.5)
     except Exception as e:
-        print(f"adspam error: {e}")
+        await log_error("adspam", e)
         try:
             await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
         except:
@@ -338,7 +384,7 @@ async def test(interaction: discord.Interaction):
             print(f"delete failed (ok if external-only): {e}")
         await interaction.followup.send("PASS — message sent.", ephemeral=True)
     except Exception as e:
-        print(f"test error: {e}")
+        await log_error("test", e)
         await interaction.followup.send(f"FAIL — `{e}`", ephemeral=True)
 
 @bot.tree.command(name="whitelist", description="Temp whitelist a user (owner only)")
@@ -390,7 +436,7 @@ async def blame(interaction: discord.Interaction, member: discord.User = None):
     try:
         await public_send(interaction, f"**{target.mention}** just raided this server. Report them.")
     except Exception as e:
-        print(f"blame error: {e}")
+        await log_error("blame", e)
         await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
 
 @bot.tree.command(name="ghostping", description="Ghost ping a user")
@@ -410,7 +456,7 @@ async def ghostping(interaction: discord.Interaction, member: discord.User):
         except Exception as e:
             print(f"ghostping delete failed: {e}")
     except Exception as e:
-        print(f"ghostping error: {e}")
+        await log_error("ghostping", e)
         await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
 
 @bot.tree.command(name="die", description="Delete every message the bot has tracked (owner only)")
@@ -480,8 +526,11 @@ async def die(interaction: discord.Interaction):
         ephemeral=True
     )
 
-@bot.tree.command(name="editspam", description="Edit-spam a message (whitelist only)")
-@app_commands.describe(text="Text to spam via edits", amount="How many edits (1-50, default 12)")
+@bot.tree.command(name="editspam", description="Edit-spam a message — scrambles letters each edit (whitelist only)")
+@app_commands.describe(
+    text="Base text to send (letters get shuffled on every edit)",
+    amount="How many edits (1-50, default 12)",
+)
 async def editspam(interaction: discord.Interaction, text: str, amount: int = 12):
     if not await must_be_in_required_guild(interaction):
         return
@@ -506,7 +555,7 @@ async def editspam(interaction: discord.Interaction, text: str, amount: int = 12
                 })
                 save_data(data)
             except Exception as e:
-                print(f"editspam channel.send failed: {e}")
+                await log_error("editspam.channel.send", e)
                 msg = await interaction.followup.send(text, ephemeral=False)
         else:
             msg = await interaction.followup.send(text, ephemeral=False)
@@ -515,13 +564,16 @@ async def editspam(interaction: discord.Interaction, text: str, amount: int = 12
         last_err = None
         for i in range(amount):
             try:
-                suffix = "\u200b" * ((i % 5) + 1)
-                await msg.edit(content=f"{text}{suffix}")
+                scrambled = scramble_text(text)
+                # keep under 2000 and force visible change
+                suffix = "\u200b" * ((i % 3) + 1)
+                content = (scrambled + suffix)[:2000]
+                await msg.edit(content=content)
                 edited += 1
                 await asyncio.sleep(0.5)
             except Exception as e:
                 last_err = e
-                print(f"editspam edit #{i}: {e}")
+                await log_error(f"editspam.edit#{i}", e, extra=f"text[:80]={text[:80]!r}")
                 break
 
         status = f"editspam done — {edited}/{amount} edits"
@@ -529,7 +581,7 @@ async def editspam(interaction: discord.Interaction, text: str, amount: int = 12
             status = f"edit failed: `{last_err}`"
         await interaction.followup.send(status, ephemeral=True)
     except Exception as e:
-        print(f"editspam error: {e}")
+        await log_error("editspam", e)
         await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
 
 @bot.tree.command(name="spam", description="Spam the channel (whitelist only) — has STOP button")
@@ -553,7 +605,7 @@ async def spam(interaction: discord.Interaction, text: str = "@everyone", amount
             await public_send(interaction, text)
             await asyncio.sleep(0.45)
     except Exception as e:
-        print(f"spam error: {e}")
+        await log_error("spam", e)
         try:
             await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
         except:
@@ -581,7 +633,7 @@ async def dmspam(interaction: discord.Interaction, member: discord.User, text: s
             await member.send(text)
             await asyncio.sleep(0.7)
         except Exception as e:
-            print(f"dmspam error: {e}")
+            await log_error("dmspam", e)
             break
 
 @bot.tree.command(name="flood", description="Send long empty paragraphs to flood chat (whitelist only)")
@@ -605,7 +657,7 @@ async def flood(interaction: discord.Interaction, amount: int = 10):
             await public_send(interaction, FLOOD_BLOCK)
             await asyncio.sleep(0.5)
     except Exception as e:
-        print(f"flood error: {e}")
+        await log_error("flood", e)
         try:
             await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
         except:
@@ -640,20 +692,26 @@ ROASTS = [
 ]
 
 @bot.tree.command(name="roast", description="Roast a user")
-@app_commands.describe(member="User to roast (optional, defaults to you)")
-async def roast(interaction: discord.Interaction, member: discord.User = None):
+@app_commands.describe(
+    member="User to roast (optional, defaults to you)",
+    amount="How many roast messages (1-50, default 5)",
+)
+async def roast(interaction: discord.Interaction, member: discord.User = None, amount: int = 5):
     if not await must_be_in_required_guild(interaction):
         return
 
+    amount = max(1, min(int(amount), 50))
     target = member or interaction.user
     await interaction.response.send_message("sent", ephemeral=True)
-    await log_command(interaction, "roast", extra=f"Target: <@{target.id}>")
+    await log_command(interaction, "roast", extra=f"Target: <@{target.id}>\nAmount: {amount}")
 
-    line = random.choice(ROASTS).format(u=target.mention)
     try:
-        await public_send(interaction, line)
+        for _ in range(amount):
+            line = random.choice(ROASTS).format(u=target.mention)
+            await public_send(interaction, line)
+            await asyncio.sleep(0.45)
     except Exception as e:
-        print(f"roast error: {e}")
+        await log_error("roast", e, extra=f"target={target.id}")
         await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
 
 @bot.tree.command(name="serverjoin", description="Force all authorized users into a server (owner only)")
