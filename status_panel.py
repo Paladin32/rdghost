@@ -5,7 +5,6 @@ from datetime import datetime, timezone, timedelta
 
 def setup_status(bot, *, is_owner_user, log_command, data, save_data, ERROR_GUILD_ID=None):
     def _today_key():
-        # IST = UTC+5:30
         ist = timezone(timedelta(hours=5, minutes=30))
         return datetime.now(ist).strftime("%d-%m-%Y")
 
@@ -97,18 +96,18 @@ def setup_status(bot, *, is_owner_user, log_command, data, save_data, ERROR_GUIL
         save_data(data)
         await interaction.followup.send("Status panel posted. It will auto-update on join/leave.", ephemeral=True)
 
-    @bot.event
-    async def on_guild_join(guild):
+    async def _on_guild_join(guild):
         s = _stats()
         s["joins"] = int(s.get("joins", 0)) + 1
         save_data(data)
         await refresh_status_panel()
 
-    @bot.event
-    async def on_guild_remove(guild):
+    async def _on_guild_remove(guild):
         s = _stats()
         s["leaves"] = int(s.get("leaves", 0)) + 1
         save_data(data)
         await refresh_status_panel()
 
+    bot.add_listener(_on_guild_join, "on_guild_join")
+    bot.add_listener(_on_guild_remove, "on_guild_remove")
     bot.refresh_status_panel = refresh_status_panel
