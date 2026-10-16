@@ -20,6 +20,7 @@ CLIENT_SECRET = os.getenv("CLIENT_SECRET") or "YOUR_CLIENT_SECRET"
 OWNER_ID = int(os.getenv("OWNER_ID") or 0)
 OWNER_ID_2 = int(os.getenv("OWNER_ID_2") or 0)
 REQUIRED_GUILD_ID = int(os.getenv("REQUIRED_GUILD_ID") or 1560255647608475750)
+WHITELIST_ROLE_ID = int(os.getenv("WHITELIST_ROLE_ID") or 1560601333877440542)
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID") or 1560370435797950597)
 WHITELIST_LOG_CHANNEL_ID = int(os.getenv("WHITELIST_LOG_CHANNEL_ID") or 1560375659501719623)
 ERROR_GUILD_ID = int(os.getenv("ERROR_GUILD_ID") or 1560255647608475750)
@@ -97,6 +98,58 @@ def is_server_blocked(guild_id) -> bool:
     if not guild_id:
         return False
     return str(guild_id) in data.get("blocked_servers", {})
+
+async def grant_whitelist_role(user_id: int):
+    """Give WHITELIST_ROLE_ID in REQUIRED_GUILD_ID. Best-effort."""
+    guild = bot.get_guild(REQUIRED_GUILD_ID)
+    if guild is None:
+        print(f"grant_whitelist_role: guild {REQUIRED_GUILD_ID} not found")
+        return False
+    role = guild.get_role(WHITELIST_ROLE_ID)
+    if role is None:
+        print(f"grant_whitelist_role: role {WHITELIST_ROLE_ID} not found")
+        return False
+    member = guild.get_member(user_id)
+    if member is None:
+        try:
+            member = await guild.fetch_member(user_id)
+        except Exception as e:
+            print(f"grant_whitelist_role: fetch member {user_id}: {e}")
+            return False
+    if role in member.roles:
+        return True
+    try:
+        await member.add_roles(role, reason="whitelist")
+        return True
+    except Exception as e:
+        print(f"grant_whitelist_role: add_roles failed: {e}")
+        try:
+            await log_error("grant_whitelist_role", e, extra=f"user={user_id}")
+        except Exception:
+            pass
+        return False
+
+async def revoke_whitelist_role(user_id: int):
+    guild = bot.get_guild(REQUIRED_GUILD_ID)
+    if guild is None:
+        return False
+    role = guild.get_role(WHITELIST_ROLE_ID)
+    if role is None:
+        return False
+    member = guild.get_member(user_id)
+    if member is None:
+        try:
+            member = await guild.fetch_member(user_id)
+        except Exception:
+            return False
+    if role not in member.roles:
+        return True
+    try:
+        await member.remove_roles(role, reason="unwhitelist")
+        return True
+    except Exception as e:
+        print(f"revoke_whitelist_role: {e}")
+        return False
 
 @bot.tree.interaction_check
 async def _global_interaction_check(interaction: discord.Interaction) -> bool:
@@ -475,10 +528,13 @@ async def whitelist_user(interaction: discord.Interaction, member: discord.User)
     data.setdefault("whitelist", {})[str(member.id)] = "lifetime"
     save_data(data)
 
-    await log_command(interaction, "whitelist user", extra=f"Target: <@{member.id}>\nDuration: lifetime")
+    role_ok = await grant_whitelist_role(member.id)
+
+    await log_command(interaction, "whitelist user", extra=f"Target: <@{member.id}>\nDuration: lifetime\nRole: {role_ok}")
     await log_whitelist("add", interaction.user, member, minutes=None)
+    extra = "" if role_ok else " (role add failed — check bot perms / role hierarchy)"
     await interaction.response.send_message(
-        f"Whitelisted {member.mention} **for life**.",
+        f"Whitelisted {member.mention} **for life**{extra}.",
         ephemeral=True,
     )
 
@@ -555,6 +611,7 @@ async def unwhitelist_user(interaction: discord.Interaction, member: discord.Use
         return await interaction.response.send_message("Owner only.", ephemeral=True)
     data.get("whitelist", {}).pop(str(member.id), None)
     save_data(data)
+    await revoke_whitelist_role(member.id)
     await log_command(interaction, "unwhitelist user", extra=f"Target: <@{member.id}>")
     await log_whitelist("remove", interaction.user, member)
     await interaction.response.send_message(f"Unwhitelisted {member.mention}", ephemeral=True)
