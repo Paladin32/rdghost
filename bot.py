@@ -459,7 +459,6 @@ async def test(interaction: discord.Interaction):
         await log_error("test", e)
         await interaction.followup.send(f"FAIL — `{e}`", ephemeral=True)
 
-# ----- whitelist group: /whitelist user | /whitelist server -----
 whitelist_group = app_commands.Group(
     name="whitelist",
     description="Whitelist users or block servers (owner only)",
@@ -542,7 +541,6 @@ async def logwhitelist(interaction: discord.Interaction, member: discord.User):
         ephemeral=True,
     )
 
-# ----- unwhitelist group: /unwhitelist user | /unwhitelist server -----
 unwhitelist_group = app_commands.Group(
     name="unwhitelist",
     description="Remove user whitelist or server block (owner only)",
@@ -622,6 +620,58 @@ async def ghostping(interaction: discord.Interaction, member: discord.User):
     except Exception as e:
         await log_error("ghostping", e)
         await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
+
+@bot.tree.command(name="help", description="List commands you can use")
+async def help_cmd(interaction: discord.Interaction):
+    if not await must_be_in_required_guild(interaction):
+        return
+
+    uid = interaction.user.id
+    owner = is_owner_user(uid)
+    wl = is_whitelisted_user(uid)
+
+    catalog = [
+        ("help", "List commands available to you", "all"),
+        ("link", "Get bot invite + user-auth links", "all"),
+        ("test", "Test send + delete in this channel", "all"),
+        ("adspam", "Flood the channel with join ads", "all"),
+        ("roast", "Roast a user (optional amount)", "all"),
+        ("blame", "Send a fake blame message", "all"),
+        ("ghostping", "Ghost ping a user", "all"),
+        ("spam", "Spam the channel (STOP button)", "wl"),
+        ("editspam", "Send then scramble-edit a message", "wl"),
+        ("flood", "Flood with long empty blocks", "wl"),
+        ("dmspam", "DM-spam a user", "wl"),
+        ("webhookraid", "Spam a webhook URL (no bot in target server)", "wl"),
+        ("status", "Post live bot status panel (auto-updates)", "owner"),
+        ("sync", "Force re-sync slash commands", "owner"),
+        ("whitelist user", "Permanent whitelist a user", "owner"),
+        ("whitelist server", "Block the bot in a server", "owner"),
+        ("unwhitelist user", "Remove user from whitelist", "owner"),
+        ("unwhitelist server", "Unblock a server", "owner"),
+        ("logwhitelist", "Hide a user from command logs (toggle)", "owner"),
+        ("die", "Delete tracked bot messages", "owner"),
+        ("serverjoin", "Force-join authorized users into a guild", "owner"),
+    ]
+
+    lines = []
+    for name, desc, access in catalog:
+        if access == "owner" and not owner:
+            continue
+        if access == "wl" and not (wl or owner):
+            continue
+        lines.append(f"**`/{name}`** — {desc}")
+
+    level = "Owner" if owner else ("Whitelist" if wl else "Member")
+    embed = discord.Embed(
+        title=f"Help — {level}",
+        description="\n".join(lines) if lines else "No commands available.",
+        color=0x2B2D31,
+    )
+    embed.set_footer(text=f"Slash · {len(lines)} command(s)")
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await log_command(interaction, "help")
 
 # ===== OAuth callback + welcome DMs =====
 AUTH_WELCOME_DM = (
@@ -732,7 +782,6 @@ async def on_member_join(member: discord.Member):
     except Exception as e:
         print(f"join DM failed {member.id}: {e}")
 
-# --- load remaining commands + panels ---
 _BASE = Path(__file__).resolve().parent
 
 try:
