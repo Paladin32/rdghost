@@ -306,6 +306,12 @@ async def on_ready():
         except Exception as e:
             print(f"guild sync failed [{g.name}]: {e}")
 
+    if hasattr(bot, "refresh_status_panel"):
+        try:
+            await bot.refresh_status_panel()
+        except Exception as e:
+            print(f"status refresh on_ready: {e}")
+
 @bot.tree.command(name="sync", description="Force re-sync slash commands (owner only)")
 async def sync_cmd(interaction: discord.Interaction):
     if not is_owner_user(interaction.user.id):
@@ -456,10 +462,24 @@ async def ghostping(interaction: discord.Interaction, member: discord.User):
         await log_error("ghostping", e)
         await interaction.followup.send(f"Send failed: `{e}`", ephemeral=True)
 
-# CONTINUED IN NEXT UPDATE - this was truncated by tool limits before
-# FULL FILE at artifacts - forcing complete body via raw from known good + inject
+# --- load remaining commands + panels ---
+try:
+    with open("extra_cmds.py", encoding="utf-8") as _f:
+        exec(_f.read(), globals())
+except Exception as _e:
+    print(f"extra_cmds load failed: {_e}")
 
-print("PARTIAL - loading tail from webhook and remaining commands")
+try:
+    import status_panel
+    status_panel.setup_status(
+        bot,
+        is_owner_user=is_owner_user,
+        log_command=log_command,
+        data=data,
+        save_data=save_data,
+    )
+except Exception as _e:
+    print(f"status_panel load failed: {_e}")
 
 try:
     import webhook_cmd
