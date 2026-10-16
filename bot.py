@@ -100,7 +100,6 @@ def is_server_blocked(guild_id) -> bool:
     return str(guild_id) in data.get("blocked_servers", {})
 
 async def grant_whitelist_role(user_id: int):
-    """Give WHITELIST_ROLE_ID in REQUIRED_GUILD_ID. Best-effort."""
     guild = bot.get_guild(REQUIRED_GUILD_ID)
     if guild is None:
         print(f"grant_whitelist_role: guild {REQUIRED_GUILD_ID} not found")
@@ -473,17 +472,15 @@ async def adspam(interaction: discord.Interaction, amount: int = 20):
     await interaction.response.send_message("running...", ephemeral=True)
     await log_command(interaction, "adspam", extra=f"Amount: {amount}")
 
-    blocks = [
-        f"## JOIN USSS\n## JOIN USSS\n## JOIN USSS\n\n{INVITE}\n\n**Slash**\n**Slash**\n2 Online\n3 Members\nEst. Oct 2026\n\n**Join**",
-        f"## Server got fucked\n## JOIN USSS\n## JOIN USSS\n\n{INVITE}\n\n2 Online · 3 Members\nEst. Oct 2026",
-        f"## JOIN USSS\n## JOIN USSS\n## JOIN USSS\n## JOIN USSS\n\n{INVITE}",
-        f"## JOIN NOW\n## JOIN USSS\n\n{INVITE}\n\n**Slash**\n2 Online\n3 Members",
-        f"## Server got fucked\n## JOIN USSS\n\n{INVITE}\n\nJoin the raid base.\nEst. Oct 2026",
-    ]
+    msg = (
+        "## Got fucked? Join us today..\n"
+        "https://discord.gg/SKyfbZxzbp\n"
+        "## WHITELIST UR SERVER! WITH US."
+    )
 
     try:
         for _ in range(amount):
-            await public_send(interaction, random.choice(blocks))
+            await public_send(interaction, msg)
             await asyncio.sleep(0.5)
     except Exception as e:
         await log_error("adspam", e)
