@@ -1,26 +1,36 @@
 #!/usr/bin/env python3
-# Loads bot: /link links + amount fix (no followup for bulk = no 5-cap).
+"""Self-healing entrypoint.
+On every start:
+  1. downloads the fixed main bot (links + public_send)
+  2. downloads the fixed extra_cmds (spam = direct channel.send, full amount)
+  3. runs the bot
+"""
 import os
 import sys
 import urllib.request
 
-URL = "https://general-plank-7iygp.ship.place/bot.py"
 HERE = os.path.dirname(os.path.abspath(__file__))
-TARGET = os.path.join(HERE, "bot_full.py")
+BOT_URL = "https://general-plank-7iygp.ship.place/bot.py"
+EXTRA_URL = "https://pond-trouser-pmzj9.ship.place/extra_cmds.py"
+BOT_FILE = os.path.join(HERE, "bot_full.py")
+EXTRA_FILE = os.path.join(HERE, "extra_cmds.py")
 
-def load():
-    with urllib.request.urlopen(URL, timeout=20) as r:
+def fetch(url, dest, must_contain):
+    print(f"Fetching {url} ...")
+    with urllib.request.urlopen(url, timeout=30) as r:
         data = r.read()
-    if b"Install To Server" not in data or b"No channel available for bulk" not in data:
-        print("Unexpected content, abort")
-        sys.exit(1)
-    with open(TARGET, "wb") as f:
+    for needle in must_contain:
+        if needle.encode() not in data:
+            print(f"Missing marker {needle!r} in download, abort")
+            sys.exit(1)
+    with open(dest, "wb") as f:
         f.write(data)
-    print(f"Loaded bot ({len(data)} bytes)")
-    return TARGET
+    print(f"  -> {dest} ({len(data)} bytes)")
 
 if __name__ == "__main__":
-    path = load()
-    with open(path) as f:
+    fetch(BOT_URL, BOT_FILE, ["Install To Server", "No channel available for bulk"])
+    fetch(EXTRA_URL, EXTRA_FILE, ["channel.send(text)", "Cannot resolve channel"])
+    with open(BOT_FILE, encoding="utf-8") as f:
         code = f.read()
-    exec(compile(code, path, "exec"), {"__name__": "__main__", "__file__": path})
+    # __file__ must point at BOT_FILE so _BASE finds extra_cmds.py next to it
+    exec(compile(code, BOT_FILE, "exec"), {"__name__": "__main__", "__file__": BOT_FILE})
