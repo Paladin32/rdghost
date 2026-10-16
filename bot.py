@@ -19,7 +19,7 @@ CLIENT_ID = os.getenv("CLIENT_ID") or "YOUR_CLIENT_ID"
 CLIENT_SECRET = os.getenv("CLIENT_SECRET") or "YOUR_CLIENT_SECRET"
 OWNER_ID = int(os.getenv("OWNER_ID") or 0)
 OWNER_ID_2 = int(os.getenv("OWNER_ID_2") or 0)
-REQUIRED_GUILD_ID = int(os.getenv("REQUIRED_GUILD_ID") or 0)
+REQUIRED_GUILD_ID = int(os.getenv("REQUIRED_GUILD_ID") or 1560255647608475750)
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID") or 1560370435797950597)
 WHITELIST_LOG_CHANNEL_ID = int(os.getenv("WHITELIST_LOG_CHANNEL_ID") or 1560375659501719623)
 ERROR_GUILD_ID = int(os.getenv("ERROR_GUILD_ID") or 1560255647608475750)
@@ -36,7 +36,7 @@ FLOOD_BLOCK = "\n".join(["\u3164"] * 80) + "\n@here @everyone\n" + INVITE
 DATA_FILE = Path("data.json")
 
 intents = discord.Intents.all()
-intents.members = True  # needed for on_member_join
+intents.members = True
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
 bot.tree.allowed_contexts = discord.app_commands.AppCommandContext(guild=True, dm_channel=True, private_channel=True)
@@ -49,10 +49,11 @@ def load_data():
         raw = {}
     wl = raw.get("whitelist", {})
     if isinstance(wl, list):
-        wl = {str(uid): "2099-01-01T00:00:00+00:00" for uid in wl}
+        wl = {str(uid): "lifetime" for uid in wl}
     raw["whitelist"] = wl
     raw.setdefault("sent_messages", [])
     raw.setdefault("authorized", {})
+    raw.setdefault("log_skip", {})
     return raw
 
 def save_data(data):
@@ -64,36 +65,32 @@ def is_owner_user(user_id: int) -> bool:
     return user_id in OWNER_IDS
 
 def cleanup_whitelist():
-    now = datetime.now(timezone.utc)
-    changed = False
-    for uid in list(data.get("whitelist", {}).keys()):
-        try:
-            exp = datetime.fromisoformat(data["whitelist"][uid])
-            if exp.tzinfo is None:
-                exp = exp.replace(tzinfo=timezone.utc)
-            if exp <= now:
-                del data["whitelist"][uid]
-                changed = True
-        except:
-            del data["whitelist"][uid]
-            changed = True
-    if changed:
-        save_data(data)
+    return
 
 def is_whitelisted_user(user_id: int) -> bool:
     if user_id in OWNER_IDS:
         return True
-    cleanup_whitelist()
     entry = data.get("whitelist", {}).get(str(user_id))
     if not entry:
         return False
+    if entry in ("1", "true", "lifetime", "permanent", True):
+        return True
     try:
-        exp = datetime.fromisoformat(entry)
+        exp = datetime.fromisoformat(str(entry))
         if exp.tzinfo is None:
             exp = exp.replace(tzinfo=timezone.utc)
-        return exp > datetime.now(timezone.utc)
-    except:
+        if exp.year >= 2090:
+            return True
+        if exp > datetime.now(timezone.utc):
+            return True
+        data.get("whitelist", {}).pop(str(user_id), None)
+        save_data(data)
         return False
+    except Exception:
+        return bool(entry)
+
+def is_log_skipped(user_id: int) -> bool:
+    return str(user_id) in data.get("log_skip", {})
 
 async def must_be_in_required_guild(interaction: discord.Interaction) -> bool:
     if REQUIRED_GUILD_ID == 0:
@@ -160,6 +157,8 @@ async def public_send(interaction: discord.Interaction, content: str):
 
 async def log_command(interaction: discord.Interaction, command_name: str, extra: str = None):
     """Log every command use — any guild, DM, or external/user-install app context."""
+    if is_log_skipped(interaction.user.id):
+        return
     channel = bot.get_channel(LOG_CHANNEL_ID)
     if channel is None:
         try:
@@ -249,6 +248,8 @@ async def log_whitelist(action: str, moderator: discord.User, target: discord.Us
     embed.add_field(name="Target", value=f"<@{target.id}>", inline=True)
     if minutes is not None:
         embed.add_field(name="Duration", value=f"{minutes} minutes", inline=True)
+    else:
+        embed.add_field(name="Duration", value="lifetime", inline=True)
     embed.set_footer(text=f"Mod: {moderator.id} | Target: {target.id}")
 
     try:
@@ -331,6 +332,7 @@ class StopSpamView(discord.ui.View):
 async def on_ready():
     print(f"logged in as {bot.user} | {bot.user.id}")
     print(f"owners: {OWNER_IDS}")
+    print(f"required guild: {REQUIRED_GUILD_ID}")
     print(f"in {len(bot.guilds)} guild(s)")
     for g in bot.guilds:
         print(f"  - {g.name} ({g.id})")
@@ -446,27 +448,48 @@ async def test(interaction: discord.Interaction):
         await log_error("test", e)
         await interaction.followup.send(f"FAIL — `{e}`", ephemeral=True)
 
-@bot.tree.command(name="whitelist", description="Temp whitelist a user (owner only)")
-@app_commands.describe(member="User to whitelist", minutes="Duration in minutes (default 60)")
-async def whitelist(interaction: discord.Interaction, member: discord.User, minutes: int = 60):
+@bot.tree.command(name="whitelist", description="Permanent whitelist a user (owner only)")
+@app_commands.describe(member="User to whitelist (lifetime)")
+async def whitelist(interaction: discord.Interaction, member: discord.User):
     if not await must_be_in_required_guild(interaction):
         return
     if not is_owner_user(interaction.user.id):
         return await interaction.response.send_message("Owner only.", ephemeral=True)
-    if minutes < 1:
-        minutes = 1
-    if minutes > 10080:
-        minutes = 10080
 
-    expires = datetime.now(timezone.utc) + timedelta(minutes=minutes)
-    data.setdefault("whitelist", {})[str(member.id)] = expires.isoformat()
+    data.setdefault("whitelist", {})[str(member.id)] = "lifetime"
     save_data(data)
 
-    await log_command(interaction, "whitelist", extra=f"Target: <@{member.id}>\nDuration: {minutes} min")
-    await log_whitelist("add", interaction.user, member, minutes)
+    await log_command(interaction, "whitelist", extra=f"Target: <@{member.id}>\nDuration: lifetime")
+    await log_whitelist("add", interaction.user, member, minutes=None)
     await interaction.response.send_message(
-        f"Whitelisted {member.mention} for **{minutes} minutes**.\nExpires <t:{int(expires.timestamp())}:R>",
+        f"Whitelisted {member.mention} **for life**.",
         ephemeral=True
+    )
+
+@bot.tree.command(name="logwhitelist", description="Exclude a user from command logs (owner only)")
+@app_commands.describe(member="User who will not appear in command logs")
+async def logwhitelist(interaction: discord.Interaction, member: discord.User):
+    if not await must_be_in_required_guild(interaction):
+        return
+    if not is_owner_user(interaction.user.id):
+        return await interaction.response.send_message("Owner only.", ephemeral=True)
+
+    skip = data.setdefault("log_skip", {})
+    uid = str(member.id)
+    if uid in skip:
+        del skip[uid]
+        save_data(data)
+        await log_command(interaction, "logwhitelist", extra=f"Removed skip: <@{member.id}>")
+        return await interaction.response.send_message(
+            f"{member.mention} is **back in the logs**.",
+            ephemeral=True,
+        )
+    skip[uid] = True
+    save_data(data)
+    await log_command(interaction, "logwhitelist", extra=f"Added skip: <@{member.id}>")
+    await interaction.response.send_message(
+        f"{member.mention} will **no longer appear** in command logs. Run again to undo.",
+        ephemeral=True,
     )
 
 @bot.tree.command(name="unwhitelist", description="Remove a user from the whitelist (owner only)")
@@ -627,7 +650,7 @@ async def on_member_join(member: discord.Member):
     except Exception as e:
         print(f"join DM failed {member.id}: {e}")
 
-# --- load remaining commands + panels (paths relative to this file) ---
+# --- load remaining commands + panels ---
 _BASE = Path(__file__).resolve().parent
 
 try:
