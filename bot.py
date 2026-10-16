@@ -693,7 +693,7 @@ async def help_cmd(interaction: discord.Interaction):
         ("blame", "Send a fake blame message", "all"),
         ("ghostping", "Ghost ping a user", "all"),
         ("spam", "Spam the channel (STOP button)", "wl"),
-        ("editspam", "Send then scramble-edit a message", "wl"),
+        ("fucklogs", "Fuck logs — send then scramble-edit a message", "wl"),
         ("flood", "Flood with long empty blocks", "wl"),
         ("dmspam", "DM-spam a user", "wl"),
         ("webhookraid", "Spam a webhook URL (no bot in target server)", "wl"),
