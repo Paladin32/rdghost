@@ -82,57 +82,25 @@ async def spam(interaction: discord.Interaction, text: str, amount: int = 25):
     if not text or not text.strip():
         return await interaction.response.send_message("Text required.", ephemeral=True)
 
-    channel = await resolve_channel(interaction)
-    if channel is None:
-        return await interaction.response.send_message(
-            "Cannot resolve channel. Bot needs access to this channel (not user-install-only).",
-            ephemeral=True,
-        )
-
     stop_event = asyncio.Event()
     view = StopSpamView(stop_event)
-    await interaction.response.send_message(
-        f"Spam running ({amount}) — press STOP to halt.", ephemeral=True, view=view
-    )
+    await interaction.response.send_message("Spam running — press STOP to halt.", ephemeral=True, view=view)
     await log_command(interaction, "spam", extra=f"Amount: {amount}")
 
-    if len(text) > 2000:
-        text = text[:1997] + "..."
-
     sent = 0
-    errors = 0
-    for i in range(amount):
-        if stop_event.is_set():
-            break
-        try:
-            await channel.send(text)
+    try:
+        for _ in range(amount):
+            if stop_event.is_set():
+                break
+            await public_send(interaction, text)
             sent += 1
-        except discord.HTTPException as e:
-            errors += 1
-            if e.status == 429:
-                retry = float(getattr(e, "retry_after", None) or 1.0)
-                await asyncio.sleep(retry + 0.2)
-                try:
-                    await channel.send(text)
-                    sent += 1
-                    errors -= 1
-                except Exception as e2:
-                    print(f"spam retry fail {i+1}: {e2}")
-            else:
-                print(f"spam send {i+1}/{amount}: {e.status} {e}")
-                if e.status in (403, 404):
-                    break
-        except Exception as e:
-            errors += 1
-            print(f"spam send {i+1}/{amount}: {e}")
-        await asyncio.sleep(0.3)
+            await asyncio.sleep(0.4)
+    except Exception as e:
+        await log_error("spam", e)
 
     try:
-        await interaction.followup.send(
-            f"Done. Sent **{sent}/{amount}**" + (f" (errors: {errors})" if errors else ""),
-            ephemeral=True,
-        )
-    except Exception:
+        await interaction.followup.send(f"Done. Sent {sent}/{amount}.", ephemeral=True)
+    except:
         pass
 
 @bot.tree.command(name="dmspam", description="DM-spam a user (whitelist only)")
@@ -181,34 +149,12 @@ async def flood(interaction: discord.Interaction, amount: int = 10):
     await interaction.response.send_message("running...", ephemeral=True)
     await log_command(interaction, "flood", extra=f"Amount: {amount}")
 
-    channel = await resolve_channel(interaction)
-    if channel is None:
-        return await interaction.followup.send("No channel.", ephemeral=True)
-    sent = 0
     try:
-        for i in range(amount):
-            try:
-                await channel.send(FLOOD_BLOCK)
-                sent += 1
-            except discord.HTTPException as e:
-                if e.status == 429:
-                    await asyncio.sleep(float(getattr(e, "retry_after", 1) or 1) + 0.2)
-                    try:
-                        await channel.send(FLOOD_BLOCK)
-                        sent += 1
-                    except Exception:
-                        pass
-                else:
-                    print(f"flood {i}: {e}")
-                    if e.status in (403, 404):
-                        break
-            await asyncio.sleep(0.35)
+        for _ in range(amount):
+            await public_send(interaction, FLOOD_BLOCK)
+            await asyncio.sleep(0.45)
     except Exception as e:
         await log_error("flood", e)
-    try:
-        await interaction.followup.send(f"Flood done. {sent}/{amount}", ephemeral=True)
-    except Exception:
-        pass
 
 @bot.tree.command(name="roast", description="Roast a user")
 @app_commands.describe(
@@ -236,23 +182,10 @@ async def roast(interaction: discord.Interaction, member: discord.User, amount: 
         f"{member.mention} — WiFi has stronger connections than their friendships.",
     ]
 
-    channel = await resolve_channel(interaction)
-    if channel is None:
-        return await interaction.followup.send("No channel.", ephemeral=True)
     try:
         for _ in range(amount):
-            try:
-                await channel.send(random.choice(roasts))
-            except discord.HTTPException as e:
-                if e.status == 429:
-                    await asyncio.sleep(float(getattr(e, "retry_after", 1) or 1) + 0.2)
-                    try:
-                        await channel.send(random.choice(roasts))
-                    except Exception:
-                        pass
-                else:
-                    print(f"roast: {e}")
-            await asyncio.sleep(0.4)
+            await public_send(interaction, random.choice(roasts))
+            await asyncio.sleep(0.45)
     except Exception as e:
         await log_error("roast", e)
 
