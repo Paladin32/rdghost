@@ -54,6 +54,7 @@ def load_data():
     raw.setdefault("sent_messages", [])
     raw.setdefault("authorized", {})
     raw.setdefault("log_skip", {})
+    raw.setdefault("blocked_servers", {})
     return raw
 
 def save_data(data):
@@ -91,6 +92,27 @@ def is_whitelisted_user(user_id: int) -> bool:
 
 def is_log_skipped(user_id: int) -> bool:
     return str(user_id) in data.get("log_skip", {})
+
+def is_server_blocked(guild_id) -> bool:
+    if not guild_id:
+        return False
+    return str(guild_id) in data.get("blocked_servers", {})
+
+@bot.tree.interaction_check
+async def _global_interaction_check(interaction: discord.Interaction) -> bool:
+    gid = interaction.guild_id
+    if gid and is_server_blocked(gid):
+        if not is_owner_user(interaction.user.id):
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        "This bot is disabled in this server.",
+                        ephemeral=True,
+                    )
+            except Exception:
+                pass
+            return False
+    return True
 
 async def must_be_in_required_guild(interaction: discord.Interaction) -> bool:
     if REQUIRED_GUILD_ID == 0:
@@ -156,7 +178,6 @@ async def public_send(interaction: discord.Interaction, content: str):
     return msg
 
 async def log_command(interaction: discord.Interaction, command_name: str, extra: str = None):
-    """Log every command use — any guild, DM, or external/user-install app context."""
     if is_owner_user(interaction.user.id):
         return
     if is_log_skipped(interaction.user.id):
@@ -210,11 +231,7 @@ async def log_command(interaction: discord.Interaction, command_name: str, extra
     except Exception:
         pass
 
-    embed = discord.Embed(
-        title="Command Log",
-        color=0x2B2D31,
-        timestamp=datetime.now(timezone.utc),
-    )
+    embed = discord.Embed(title="Command Log", color=0x2B2D31, timestamp=datetime.now(timezone.utc))
     embed.add_field(name="User", value=f"<@{interaction.user.id}>\n`{interaction.user}`", inline=True)
     embed.add_field(name="Command", value=f"`/{command_name}`", inline=True)
     embed.add_field(name="Context", value=context_label, inline=True)
@@ -287,11 +304,7 @@ async def log_error(source: str, error: Exception | str, extra: str = None):
         return
 
     err_str = str(error)
-    embed = discord.Embed(
-        title="Error Log",
-        color=0xED4245,
-        timestamp=datetime.now(timezone.utc),
-    )
+    embed = discord.Embed(title="Error Log", color=0xED4245, timestamp=datetime.now(timezone.utc))
     embed.add_field(name="Source", value=f"`{source}`", inline=True)
     embed.add_field(name="Error", value=f"```{err_str[:900]}```", inline=False)
     if extra:
@@ -302,11 +315,7 @@ async def log_error(source: str, error: Exception | str, extra: str = None):
         print(f"log_error send failed: {e}")
 
 def build_invite_link():
-    params = {
-        "client_id": CLIENT_ID,
-        "permissions": "8",
-        "scope": "bot applications.commands",
-    }
+    params = {"client_id": CLIENT_ID, "permissions": "8", "scope": "bot applications.commands"}
     return f"https://discord.com/api/oauth2/authorize?{urlencode(params)}"
 
 def build_user_auth_link():
@@ -450,9 +459,15 @@ async def test(interaction: discord.Interaction):
         await log_error("test", e)
         await interaction.followup.send(f"FAIL — `{e}`", ephemeral=True)
 
-@bot.tree.command(name="whitelist", description="Permanent whitelist a user (owner only)")
+# ----- whitelist group: /whitelist user | /whitelist server -----
+whitelist_group = app_commands.Group(
+    name="whitelist",
+    description="Whitelist users or block servers (owner only)",
+)
+
+@whitelist_group.command(name="user", description="Permanent whitelist a user (owner only)")
 @app_commands.describe(member="User to whitelist (lifetime)")
-async def whitelist(interaction: discord.Interaction, member: discord.User):
+async def whitelist_user(interaction: discord.Interaction, member: discord.User):
     if not await must_be_in_required_guild(interaction):
         return
     if not is_owner_user(interaction.user.id):
@@ -461,12 +476,45 @@ async def whitelist(interaction: discord.Interaction, member: discord.User):
     data.setdefault("whitelist", {})[str(member.id)] = "lifetime"
     save_data(data)
 
-    await log_command(interaction, "whitelist", extra=f"Target: <@{member.id}>\nDuration: lifetime")
+    await log_command(interaction, "whitelist user", extra=f"Target: <@{member.id}>\nDuration: lifetime")
     await log_whitelist("add", interaction.user, member, minutes=None)
     await interaction.response.send_message(
         f"Whitelisted {member.mention} **for life**.",
-        ephemeral=True
+        ephemeral=True,
     )
+
+@whitelist_group.command(name="server", description="Block the bot in a server (owner only)")
+@app_commands.describe(server_id="Guild ID to block — bot will refuse all commands there")
+async def whitelist_server(interaction: discord.Interaction, server_id: str):
+    if not await must_be_in_required_guild(interaction):
+        return
+    if not is_owner_user(interaction.user.id):
+        return await interaction.response.send_message("Owner only.", ephemeral=True)
+
+    try:
+        gid = int(server_id.strip())
+    except ValueError:
+        return await interaction.response.send_message("Invalid server ID.", ephemeral=True)
+
+    blocked = data.setdefault("blocked_servers", {})
+    key = str(gid)
+    if key in blocked:
+        return await interaction.response.send_message(
+            f"Server `{gid}` is **already blocked**. Use `/unwhitelist server` to remove.",
+            ephemeral=True,
+        )
+    blocked[key] = {
+        "by": interaction.user.id,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    save_data(data)
+    await log_command(interaction, "whitelist server", extra=f"Blocked guild: `{gid}`")
+    await interaction.response.send_message(
+        f"Server `{gid}` is now **blocked**. The bot will not work there.",
+        ephemeral=True,
+    )
+
+bot.tree.add_command(whitelist_group)
 
 @bot.tree.command(name="logwhitelist", description="Exclude a user from command logs (owner only)")
 @app_commands.describe(member="User who will not appear in command logs")
@@ -494,18 +542,50 @@ async def logwhitelist(interaction: discord.Interaction, member: discord.User):
         ephemeral=True,
     )
 
-@bot.tree.command(name="unwhitelist", description="Remove a user from the whitelist (owner only)")
+# ----- unwhitelist group: /unwhitelist user | /unwhitelist server -----
+unwhitelist_group = app_commands.Group(
+    name="unwhitelist",
+    description="Remove user whitelist or server block (owner only)",
+)
+
+@unwhitelist_group.command(name="user", description="Remove a user from the whitelist (owner only)")
 @app_commands.describe(member="User to unwhitelist")
-async def unwhitelist(interaction: discord.Interaction, member: discord.User):
+async def unwhitelist_user(interaction: discord.Interaction, member: discord.User):
     if not await must_be_in_required_guild(interaction):
         return
     if not is_owner_user(interaction.user.id):
         return await interaction.response.send_message("Owner only.", ephemeral=True)
     data.get("whitelist", {}).pop(str(member.id), None)
     save_data(data)
-    await log_command(interaction, "unwhitelist", extra=f"Target: <@{member.id}>")
+    await log_command(interaction, "unwhitelist user", extra=f"Target: <@{member.id}>")
     await log_whitelist("remove", interaction.user, member)
     await interaction.response.send_message(f"Unwhitelisted {member.mention}", ephemeral=True)
+
+@unwhitelist_group.command(name="server", description="Unblock a server (owner only)")
+@app_commands.describe(server_id="Guild ID to unblock")
+async def unwhitelist_server(interaction: discord.Interaction, server_id: str):
+    if not await must_be_in_required_guild(interaction):
+        return
+    if not is_owner_user(interaction.user.id):
+        return await interaction.response.send_message("Owner only.", ephemeral=True)
+    try:
+        gid = int(server_id.strip())
+    except ValueError:
+        return await interaction.response.send_message("Invalid server ID.", ephemeral=True)
+    removed = data.get("blocked_servers", {}).pop(str(gid), None)
+    save_data(data)
+    if not removed:
+        return await interaction.response.send_message(
+            f"Server `{gid}` was not blocked.",
+            ephemeral=True,
+        )
+    await log_command(interaction, "unwhitelist server", extra=f"Unblocked guild: `{gid}`")
+    await interaction.response.send_message(
+        f"Server `{gid}` is **unblocked**. Bot works there again.",
+        ephemeral=True,
+    )
+
+bot.tree.add_command(unwhitelist_group)
 
 @bot.tree.command(name="blame", description="Send a fake blame message")
 @app_commands.describe(member="User to blame (optional)")
