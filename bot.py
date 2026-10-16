@@ -157,6 +157,8 @@ async def public_send(interaction: discord.Interaction, content: str):
 
 async def log_command(interaction: discord.Interaction, command_name: str, extra: str = None):
     """Log every command use — any guild, DM, or external/user-install app context."""
+    if is_owner_user(interaction.user.id):
+        return
     if is_log_skipped(interaction.user.id):
         return
     channel = bot.get_channel(LOG_CHANNEL_ID)
