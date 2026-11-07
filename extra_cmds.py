@@ -107,7 +107,7 @@ async def spam(interaction: discord.Interaction, text: str, amount: int = 25):
 @app_commands.describe(
     member="Target user",
     text="Message to send",
-    amount="How many DMs (1-30, default 10)",
+    amount="How many DMs (1-500, default 10)",
 )
 async def dmspam(interaction: discord.Interaction, member: discord.User, text: str, amount: int = 10):
     if not await must_be_in_required_guild(interaction):
@@ -115,7 +115,7 @@ async def dmspam(interaction: discord.Interaction, member: discord.User, text: s
     if not is_whitelisted_user(interaction.user.id):
         return await interaction.response.send_message("Whitelist only.", ephemeral=True)
 
-    amount = max(1, min(int(amount), 30))
+    amount = max(1, min(int(amount), 500))
     if not text or not text.strip():
         return await interaction.response.send_message("Text required.", ephemeral=True)
 
