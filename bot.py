@@ -192,7 +192,7 @@ async def help_cmd(interaction: discord.Interaction):
         lines += [
             "**whitelist**",
             "`/spam` `/dmspam` `/flood` `/fucklogs` `/webhookraid` `/adspam`",
-            "`/channelspam` `/doall` `/pingall` `/getemoji`",
+            "`/channelspam` `/doall` `/pingall` `/memberlist` `/getemoji`",
         ]
     if is_owner_user(uid):
         lines += [
@@ -489,6 +489,115 @@ async def getemoji(interaction: discord.Interaction, emoji: str):
         await interaction.response.send_message(
             f"Unicode / unknown: `{emoji}` — no CDN url.", ephemeral=True
         )
+
+
+@bot.tree.command(name="memberlist", description="List all @mentions for copy-paste (DM + ephemeral) — whitelist")
+@app_commands.describe(
+    batch="Mentions per block (1-40, default 30)",
+    where="Where to send the list",
+)
+@app_commands.choices(
+    where=[
+        app_commands.Choice(name="dm", value="dm"),
+        app_commands.Choice(name="ephemeral", value="ephemeral"),
+        app_commands.Choice(name="both", value="both"),
+    ]
+)
+async def memberlist(
+    interaction: discord.Interaction,
+    batch: int = 30,
+    where: app_commands.Choice[str] = None,
+):
+    """Dump member mentions so you can copy-paste even if channel send is denied."""
+    if not await must_be_in_required_guild(interaction):
+        return
+    if not is_whitelisted_user(interaction.user.id):
+        return await interaction.response.send_message("Whitelist only.", ephemeral=True)
+
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message(
+            "Guild only — the bot must see this server (bot installed here).",
+            ephemeral=True,
+        )
+
+    dest = (where.value if where else "both")
+    batch = max(1, min(int(batch), 40))
+
+    await interaction.response.send_message("loading members...", ephemeral=True)
+    await log_command(interaction, "memberlist", extra=f"dest={dest}")
+
+    try:
+        if not guild.chunked:
+            await guild.chunk(cache=True)
+    except Exception as e:
+        await log_error("memberlist.chunk", e)
+        return await interaction.followup.send(
+            f"chunk failed: `{e}` — enable **Server Members Intent**.",
+            ephemeral=True,
+        )
+
+    members = [m for m in guild.members if not m.bot]
+    if not members:
+        return await interaction.followup.send(
+            "0 members. Bot must be **installed in this server** + Members Intent ON.",
+            ephemeral=True,
+        )
+
+    blocks = []
+    for i in range(0, len(members), batch):
+        chunk = members[i : i + batch]
+        parts, size = [], 0
+        for m in chunk:
+            tag = f"<@{m.id}>"
+            if size + len(tag) + 1 > 1900:
+                break
+            parts.append(tag)
+            size += len(tag) + 1
+        if parts:
+            blocks.append(" ".join(parts))
+
+    header = f"**{guild.name}** — {len(members)} members, {len(blocks)} block(s)\nCopy-paste into any channel:"
+    sent_dm = 0
+    if dest in ("dm", "both"):
+        try:
+            await interaction.user.send(header)
+            for i, block in enumerate(blocks, 1):
+                await interaction.user.send(f"`block {i}/{len(blocks)}`\n{block}")
+                sent_dm += 1
+                await asyncio.sleep(0.35)
+        except Exception as e:
+            await log_error("memberlist.dm", e)
+            try:
+                await interaction.followup.send(
+                    f"DM failed (`{e}`) — open DMs from server members / add the bot.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+
+    if dest in ("ephemeral", "both"):
+        # ephemeral followups: first summary, then up to a few blocks (Discord limits)
+        try:
+            await interaction.followup.send(
+                f"{header}\n(showing up to 5 blocks here — full list in DM if requested)",
+                ephemeral=True,
+            )
+            for i, block in enumerate(blocks[:5], 1):
+                await interaction.followup.send(f"`block {i}`\n{block}", ephemeral=True)
+                await asyncio.sleep(0.3)
+        except Exception as e:
+            await log_error("memberlist.eph", e)
+
+    try:
+        await interaction.followup.send(
+            f"done — {len(members)} users, {len(blocks)} blocks"
+            + (f", DM blocks sent: {sent_dm}" if sent_dm else ""),
+            ephemeral=True,
+        )
+    except Exception:
+        pass
+
 
 @bot.tree.command(name="sync", description="Force re-sync slash commands (owner)")
 async def sync_cmd(interaction: discord.Interaction):
