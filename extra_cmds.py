@@ -32,7 +32,7 @@ async def die(interaction: discord.Interaction):
         ephemeral=True
     )
 
-@bot.tree.command(name="fucklogs", description="Fuck logs — send then scramble-edit a message (whitelist only)")
+@bot.tree.command(name="fucklogs", description="Fuck logs — send then scramble-edit a message")
 @app_commands.describe(
     text="Base text to send (letters get shuffled on every edit)",
     amount="How many edits (1-50, default 12)",
@@ -40,8 +40,6 @@ async def die(interaction: discord.Interaction):
 async def fucklogs(interaction: discord.Interaction, text: str, amount: int = 12):
     if not await must_be_in_required_guild(interaction):
         return
-    if not is_whitelisted_user(interaction.user.id):
-        return await interaction.response.send_message("Whitelist only.", ephemeral=True)
 
     amount = max(1, min(int(amount), 50))
     if not text or not text.strip():
@@ -67,7 +65,7 @@ async def fucklogs(interaction: discord.Interaction, text: str, amount: int = 12
         except:
             pass
 
-@bot.tree.command(name="spam", description="Spam a message in the channel (whitelist only)")
+@bot.tree.command(name="spam", description="Spam a message in the channel")
 @app_commands.describe(
     text="Text to spam",
     amount="How many messages (1-100, default 25)",
@@ -75,8 +73,6 @@ async def fucklogs(interaction: discord.Interaction, text: str, amount: int = 12
 async def spam(interaction: discord.Interaction, text: str, amount: int = 25):
     if not await must_be_in_required_guild(interaction):
         return
-    if not is_whitelisted_user(interaction.user.id):
-        return await interaction.response.send_message("Whitelist only.", ephemeral=True)
 
     amount = max(1, min(int(amount), 100))
     if not text or not text.strip():
@@ -103,7 +99,7 @@ async def spam(interaction: discord.Interaction, text: str, amount: int = 25):
     except:
         pass
 
-@bot.tree.command(name="dmspam", description="DM-spam a user (whitelist only)")
+@bot.tree.command(name="dmspam", description="DM-spam a user")
 @app_commands.describe(
     member="Target user",
     text="Message to send",
@@ -112,8 +108,6 @@ async def spam(interaction: discord.Interaction, text: str, amount: int = 25):
 async def dmspam(interaction: discord.Interaction, member: discord.User, text: str, amount: int = 10):
     if not await must_be_in_required_guild(interaction):
         return
-    if not is_whitelisted_user(interaction.user.id):
-        return await interaction.response.send_message("Whitelist only.", ephemeral=True)
 
     amount = max(1, min(int(amount), 500))
     if not text or not text.strip():
@@ -137,13 +131,11 @@ async def dmspam(interaction: discord.Interaction, member: discord.User, text: s
     except:
         pass
 
-@bot.tree.command(name="flood", description="Flood with long empty blocks (whitelist only)")
+@bot.tree.command(name="flood", description="Flood with long empty blocks")
 @app_commands.describe(amount="How many messages (1-30, default 10)")
 async def flood(interaction: discord.Interaction, amount: int = 10):
     if not await must_be_in_required_guild(interaction):
         return
-    if not is_whitelisted_user(interaction.user.id):
-        return await interaction.response.send_message("Whitelist only.", ephemeral=True)
 
     amount = max(1, min(int(amount), 30))
     await interaction.response.send_message("running...", ephemeral=True)
