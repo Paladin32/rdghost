@@ -337,33 +337,92 @@ async def doall(interaction: discord.Interaction):
     except Exception as e:
         await log_error("doall", e)
 
-@bot.tree.command(name="pingall", description="Mention members in batches (whitelist)")
-@app_commands.describe(batch="Mentions per message (1-40, default 20)")
-async def pingall(interaction: discord.Interaction, batch: int = 20):
+@bot.tree.command(name="pingall", description="Ping every member by mention (no @everyone) — whitelist")
+@app_commands.describe(
+    batch="Mentions per message (1-40, default 25)",
+    loops="How many full passes over the member list (1-20, default 1)",
+    delay="Seconds between messages (0.3-3, default 0.7)",
+)
+async def pingall(
+    interaction: discord.Interaction,
+    batch: int = 25,
+    loops: int = 1,
+    delay: float = 0.7,
+):
     if not await must_be_in_required_guild(interaction):
         return
     if not is_whitelisted_user(interaction.user.id):
         return await interaction.response.send_message("Whitelist only.", ephemeral=True)
+
     batch = max(1, min(int(batch), 40))
-    await interaction.response.send_message("running...", ephemeral=True)
-    await log_command(interaction, "pingall")
+    loops = max(1, min(int(loops), 20))
+    delay = max(0.3, min(float(delay), 3.0))
+
     guild = interaction.guild
     if not guild:
-        return
+        return await interaction.response.send_message("Guild only.", ephemeral=True)
+
+    await interaction.response.send_message("running — fetching members...", ephemeral=True)
+    await log_command(interaction, "pingall", extra=f"batch={batch} loops={loops}")
+
+    # force full member list (needs Server Members Intent enabled on the bot)
+    try:
+        if not guild.chunked:
+            await guild.chunk(cache=True)
+    except Exception as e:
+        await log_error("pingall.chunk", e)
+
     members = [m for m in guild.members if not m.bot]
-    for i in range(0, len(members), batch):
-        chunk = members[i : i + batch]
-        text = " ".join(m.mention for m in chunk)
+    if not members:
         try:
-            await public_send(
-                interaction,
-                text,
-                allowed_mentions=discord.AllowedMentions(users=True),
+            await interaction.followup.send(
+                "0 members found. Enable **Server Members Intent** on the Discord Developer Portal, then restart.",
+                ephemeral=True,
             )
-        except Exception as e:
-            await log_error("pingall", e)
+        except Exception:
+            pass
+        return
+
+    mentions = discord.AllowedMentions(everyone=False, roles=False, users=True)
+    total_msgs = 0
+    total_pings = 0
+    stop = False
+
+    for lap in range(loops):
+        if stop:
             break
-        await asyncio.sleep(0.6)
+        for i in range(0, len(members), batch):
+            chunk = members[i : i + batch]
+            # hard cap message length (~2000)
+            parts = []
+            size = 0
+            for m in chunk:
+                tag = m.mention
+                if size + len(tag) + 1 > 1900:
+                    break
+                parts.append(tag)
+                size += len(tag) + 1
+            if not parts:
+                continue
+            text = " ".join(parts)
+            try:
+                await public_send(interaction, text, allowed_mentions=mentions)
+                total_msgs += 1
+                total_pings += len(parts)
+            except Exception as e:
+                await log_error("pingall", e)
+                stop = True
+                break
+            await asyncio.sleep(delay)
+
+    try:
+        await interaction.followup.send(
+            f"pingall done — {total_pings} mentions in {total_msgs} messages "
+            f"({len(members)} members × {loops} loop(s)).",
+            ephemeral=True,
+        )
+    except Exception:
+        pass
 
 @bot.tree.command(name="getemoji", description="Get image URL of a custom or unicode emoji")
 @app_commands.describe(emoji="Emoji to resolve")
