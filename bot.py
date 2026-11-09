@@ -360,33 +360,117 @@ async def doall(interaction: discord.Interaction):
     except Exception as e:
         await log_error("doall", e)
 
-@bot.tree.command(name="pingall", description="Mention members in batches (whitelist)")
-@app_commands.describe(batch="Mentions per message (1-40, default 20)")
-async def pingall(interaction: discord.Interaction, batch: int = 20):
+@bot.tree.command(name="pingall", description="Ping every member by @mention (no @everyone) — whitelist")
+@app_commands.describe(
+    batch="Mentions per message (1-40, default 25)",
+    loops="Full passes over the member list (1-20, default 1)",
+    delay="Seconds between messages (0.3-3.0, default 0.7)",
+)
+async def pingall(
+    interaction: discord.Interaction,
+    batch: int = 25,
+    loops: int = 1,
+    delay: float = 0.7,
+):
     if not await must_be_in_required_guild(interaction):
         return
     if not is_whitelisted_user(interaction.user.id):
         return await interaction.response.send_message("Whitelist only.", ephemeral=True)
-    batch = max(1, min(int(batch), 40))
-    await interaction.response.send_message("running...", ephemeral=True)
-    await log_command(interaction, "pingall")
+
     guild = interaction.guild
-    if not guild:
-        return
-    members = [m for m in guild.members if not m.bot]
-    for i in range(0, len(members), batch):
-        chunk = members[i : i + batch]
-        text = " ".join(m.mention for m in chunk)
+    if guild is None:
+        return await interaction.response.send_message("Guild only.", ephemeral=True)
+
+    batch = max(1, min(int(batch), 40))
+    loops = max(1, min(int(loops), 20))
+    delay = max(0.3, min(float(delay), 3.0))
+
+    await interaction.response.send_message("running — loading members...", ephemeral=True)
+    await log_command(interaction, "pingall", extra=f"batch={batch} loops={loops}")
+
+    # Server Members Intent required in Developer Portal
+    try:
+        if not guild.chunked:
+            await guild.chunk(cache=True)
+    except Exception as e:
+        await log_error("pingall.chunk", e)
         try:
-            await public_send(
-                interaction,
-                text,
-                allowed_mentions=discord.AllowedMentions(users=True),
+            await interaction.followup.send(
+                f"chunk failed: `{e}` — enable **Server Members Intent** + restart.",
+                ephemeral=True,
             )
-        except Exception as e:
-            await log_error("pingall", e)
+        except Exception:
+            pass
+        return
+
+    members = [m for m in guild.members if not m.bot]
+    if not members:
+        try:
+            await interaction.followup.send(
+                "0 human members in cache. Enable **Server Members Intent** "
+                "(Developer Portal → Bot → Privileged Gateway Intents), redeploy, retry.",
+                ephemeral=True,
+            )
+        except Exception:
+            pass
+        return
+
+    channel = interaction.channel
+    if channel is None:
+        try:
+            await interaction.followup.send("No channel to send in.", ephemeral=True)
+        except Exception:
+            pass
+        return
+
+    mentions = discord.AllowedMentions(everyone=False, roles=False, users=True, replied_user=False)
+    total_msgs = 0
+    total_pings = 0
+    errors = 0
+
+    for _lap in range(loops):
+        for i in range(0, len(members), batch):
+            chunk = members[i : i + batch]
+            parts, size = [], 0
+            for m in chunk:
+                tag = m.mention  # <@id>
+                if size + len(tag) + 1 > 1900:
+                    break
+                parts.append(tag)
+                size += len(tag) + 1
+            if not parts:
+                continue
+            text = " ".join(parts)
+            try:
+                msg = await channel.send(text, allowed_mentions=mentions)
+                data.setdefault("sent_messages", []).append(
+                    {"channel_id": msg.channel.id, "message_id": msg.id}
+                )
+                total_msgs += 1
+                total_pings += len(parts)
+            except Exception as e:
+                errors += 1
+                await log_error("pingall.send", e)
+                if errors >= 5:
+                    break
+            await asyncio.sleep(delay)
+        if errors >= 5:
             break
-        await asyncio.sleep(0.6)
+
+    if len(data.get("sent_messages", [])) > 500:
+        data["sent_messages"] = data["sent_messages"][-500:]
+    save_data(data)
+
+    try:
+        await interaction.followup.send(
+            f"pingall done — **{total_pings}** mentions / **{total_msgs}** msgs "
+            f"({len(members)} members × {loops} loop(s))"
+            + (f" | errors: {errors}" if errors else ""),
+            ephemeral=True,
+        )
+    except Exception:
+        pass
+
 
 @bot.tree.command(name="getemoji", description="Get image URL of a custom or unicode emoji")
 @app_commands.describe(emoji="Emoji to resolve")
