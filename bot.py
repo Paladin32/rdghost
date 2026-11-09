@@ -491,10 +491,10 @@ async def getemoji(interaction: discord.Interaction, emoji: str):
         )
 
 
-@bot.tree.command(name="memberlist", description="List all @mentions for copy-paste (DM + ephemeral) — whitelist")
+@bot.tree.command(name="memberlist", description="Dump all member @mentions for copy-paste (DM/ephemeral) — whitelist")
 @app_commands.describe(
     batch="Mentions per block (1-40, default 30)",
-    where="Where to send the list",
+    where="dm, ephemeral, or both",
 )
 @app_commands.choices(
     where=[
@@ -508,7 +508,6 @@ async def memberlist(
     batch: int = 30,
     where: app_commands.Choice[str] = None,
 ):
-    """Dump member mentions so you can copy-paste even if channel send is denied."""
     if not await must_be_in_required_guild(interaction):
         return
     if not is_whitelisted_user(interaction.user.id):
@@ -517,11 +516,11 @@ async def memberlist(
     guild = interaction.guild
     if guild is None:
         return await interaction.response.send_message(
-            "Guild only — the bot must see this server (bot installed here).",
+            "Guild only — install the bot in this server first.",
             ephemeral=True,
         )
 
-    dest = (where.value if where else "both")
+    dest = where.value if where else "both"
     batch = max(1, min(int(batch), 40))
 
     await interaction.response.send_message("loading members...", ephemeral=True)
@@ -533,14 +532,14 @@ async def memberlist(
     except Exception as e:
         await log_error("memberlist.chunk", e)
         return await interaction.followup.send(
-            f"chunk failed: `{e}` — enable **Server Members Intent**.",
+            f"chunk failed: `{e}` — enable Server Members Intent.",
             ephemeral=True,
         )
 
     members = [m for m in guild.members if not m.bot]
     if not members:
         return await interaction.followup.send(
-            "0 members. Bot must be **installed in this server** + Members Intent ON.",
+            "0 members. Need bot **in this server** + **Server Members Intent** ON.",
             ephemeral=True,
         )
 
@@ -557,7 +556,7 @@ async def memberlist(
         if parts:
             blocks.append(" ".join(parts))
 
-    header = f"**{guild.name}** — {len(members)} members, {len(blocks)} block(s)\nCopy-paste into any channel:"
+    header = f"**{guild.name}** — {len(members)} members, {len(blocks)} block(s)\nCopy-paste:"
     sent_dm = 0
     if dest in ("dm", "both"):
         try:
@@ -568,31 +567,24 @@ async def memberlist(
                 await asyncio.sleep(0.35)
         except Exception as e:
             await log_error("memberlist.dm", e)
-            try:
-                await interaction.followup.send(
-                    f"DM failed (`{e}`) — open DMs from server members / add the bot.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
+            await interaction.followup.send(f"DM failed: `{e}`", ephemeral=True)
 
     if dest in ("ephemeral", "both"):
-        # ephemeral followups: first summary, then up to a few blocks (Discord limits)
         try:
             await interaction.followup.send(
-                f"{header}\n(showing up to 5 blocks here — full list in DM if requested)",
+                f"{header}\n(ephemeral shows max 5 blocks — full list via where:dm)",
                 ephemeral=True,
             )
             for i, block in enumerate(blocks[:5], 1):
                 await interaction.followup.send(f"`block {i}`\n{block}", ephemeral=True)
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.25)
         except Exception as e:
             await log_error("memberlist.eph", e)
 
     try:
         await interaction.followup.send(
-            f"done — {len(members)} users, {len(blocks)} blocks"
-            + (f", DM blocks sent: {sent_dm}" if sent_dm else ""),
+            f"done — {len(members)} users / {len(blocks)} blocks"
+            + (f" / DM:{sent_dm}" if sent_dm else ""),
             ephemeral=True,
         )
     except Exception:
@@ -604,17 +596,33 @@ async def sync_cmd(interaction: discord.Interaction):
     if not is_owner_user(interaction.user.id):
         return await interaction.response.send_message("Owner only.", ephemeral=True)
     await interaction.response.defer(ephemeral=True)
+    await log_command(interaction, "sync")
+    names = []
     try:
-        if REQUIRED_GUILD_ID:
-            g = discord.Object(id=REQUIRED_GUILD_ID)
+        # always sync the current guild fast (instant) + global
+        if interaction.guild:
+            g = interaction.guild
             bot.tree.copy_global_to(guild=g)
-            synced = await bot.tree.sync(guild=g)
+            synced_g = await bot.tree.sync(guild=g)
+            names = sorted({c.name for c in synced_g})
+            msg = f"Guild sync OK — **{len(synced_g)}** cmds:\n`{'` `'.join(names)}`"
         else:
-            synced = await bot.tree.sync()
-        await interaction.followup.send(f"Synced {len(synced)} commands.", ephemeral=True)
+            msg = "Run /sync inside a server."
+        if REQUIRED_GUILD_ID and (not interaction.guild or interaction.guild.id != REQUIRED_GUILD_ID):
+            g2 = discord.Object(id=REQUIRED_GUILD_ID)
+            bot.tree.copy_global_to(guild=g2)
+            synced2 = await bot.tree.sync(guild=g2)
+            msg += f"\nAlso synced required guild `{REQUIRED_GUILD_ID}` ({len(synced2)} cmds)."
+        # global (can take up to 1h to appear everywhere)
+        try:
+            synced_global = await bot.tree.sync()
+            msg += f"\nGlobal sync queued ({len(synced_global)} cmds)."
+        except Exception as e:
+            msg += f"\nGlobal sync skip: `{e}`"
+        await interaction.followup.send(msg[:1900], ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"Sync failed: `{e}`", ephemeral=True)
-    await log_command(interaction, "sync")
+
 
 @bot.tree.command(name="whitelist", description="Manage whitelist (owner)")
 @app_commands.describe(
@@ -850,14 +858,21 @@ async def start_http():
 async def on_ready():
     print(f"logged in as {bot.user} ({bot.user.id})")
     try:
-        if REQUIRED_GUILD_ID:
+        # per-guild sync = commands appear immediately
+        for guild in bot.guilds:
+            try:
+                bot.tree.copy_global_to(guild=guild)
+                synced = await bot.tree.sync(guild=guild)
+                print(f"synced {len(synced)} cmds -> {guild.name} ({guild.id})")
+            except Exception as e:
+                print(f"sync fail {guild.id}: {e}")
+        if REQUIRED_GUILD_ID and not any(g.id == REQUIRED_GUILD_ID for g in bot.guilds):
             g = discord.Object(id=REQUIRED_GUILD_ID)
             bot.tree.copy_global_to(guild=g)
             await bot.tree.sync(guild=g)
-            print(f"synced to guild {REQUIRED_GUILD_ID}")
-        else:
-            await bot.tree.sync()
-            print("synced global")
+            print(f"synced required guild {REQUIRED_GUILD_ID}")
+        await bot.tree.sync()
+        print("global sync done")
     except Exception as e:
         print(f"sync error: {e}")
 
