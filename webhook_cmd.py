@@ -5,7 +5,7 @@ from discord import app_commands
 import requests as http_requests
 
 def setup(bot, *, must_be_in_required_guild, is_whitelisted_user, log_command, log_error):
-    @bot.tree.command(name="webhookraid", description="Spam a Discord webhook URL (whitelist only — bot does not need to be in the server)")
+    @bot.tree.command(name="webhookraid", description="Spam a Discord webhook URL (bot does not need to be in the server)")
     @app_commands.describe(
         webhook_url="Full Discord webhook URL (https://discord.com/api/webhooks/...)",
         text="Message content to spam",
@@ -23,8 +23,6 @@ def setup(bot, *, must_be_in_required_guild, is_whitelisted_user, log_command, l
     ):
         if not await must_be_in_required_guild(interaction):
             return
-        if not is_whitelisted_user(interaction.user.id):
-            return await interaction.response.send_message("Whitelist only.", ephemeral=True)
 
         amount = max(1, min(int(amount), 100))
         webhook_url = webhook_url.strip()
