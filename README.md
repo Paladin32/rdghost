@@ -4,7 +4,15 @@ CLIENT_SECRET=
 OWNER_ID=
 OWNER_ID_2=
 REQUIRED_GUILD_ID=
-LOG_CHANNEL_ID=1560370435797950597
-WHITELIST_LOG_CHANNEL_ID=1560375659501719623
+LOG_CHANNEL_ID=
+WHITELIST_LOG_CHANNEL_ID=
+WHITELIST_ROLE_ID=
 PREFIX=/
-REDIRECT_URI=http://localhost:8080/callback
+INVITE_URL=https://discord.gg/your-invite
+
+# OAuth callback — must match Discord Developer Portal → OAuth2 → Redirects EXACTLY
+# Prefer setting this to your Railway public URL:
+REDIRECT_URI=https://YOUR-SERVICE.up.railway.app/callback
+
+# Optional: Railway usually sets PORT automatically
+# PORT=8080
