@@ -92,9 +92,8 @@ def is_owner_user(uid: int) -> bool:
     return uid in OWNER_IDS
 
 def is_whitelisted_user(uid: int) -> bool:
-    if is_owner_user(uid):
-        return True
-    return uid in set(data.get("whitelist_users", []))
+    # whitelist system disabled — everyone allowed
+    return True
 
 async def must_be_in_required_guild(interaction: discord.Interaction) -> bool:
     if not REQUIRED_GUILD_ID:
@@ -185,19 +184,15 @@ async def help_cmd(interaction: discord.Interaction):
         return
     uid = interaction.user.id
     lines = [
-        "**all**",
-        "`/help` `/link` `/test` `/roast` `/blame` `/ghostping` `/credits`",
+        "**commands**",
+        "`/help` `/link` `/test` `/credits` `/roast` `/blame` `/ghostping`",
+        "`/spam` `/dmspam` `/flood` `/fucklogs` `/webhookraid` `/adspam`",
+        "`/channelspam` `/doall` `/pingall` `/memberlist` `/getemoji`",
     ]
-    if is_whitelisted_user(uid):
-        lines += [
-            "**whitelist**",
-            "`/spam` `/dmspam` `/flood` `/fucklogs` `/webhookraid` `/adspam`",
-            "`/channelspam` `/doall` `/pingall` `/memberlist` `/getemoji`",
-        ]
     if is_owner_user(uid):
         lines += [
             "**owner**",
-            "`/status` `/sync` `/whitelist` `/unwhitelist` `/die` `/serverjoin` `/logwhitelist`",
+            "`/status` `/sync` `/die` `/serverjoin` `/logwhitelist`",
         ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
     await log_command(interaction, "help")
@@ -284,8 +279,6 @@ async def ghostping(interaction: discord.Interaction, member: discord.User):
 async def adspam(interaction: discord.Interaction, amount: int = 15):
     if not await must_be_in_required_guild(interaction):
         return
-    if not is_whitelisted_user(interaction.user.id):
-        return await interaction.response.send_message("Whitelist only.", ephemeral=True)
     amount = max(1, min(int(amount), 50))
     await interaction.response.send_message("running...", ephemeral=True)
     await log_command(interaction, "adspam", extra=f"Amount: {amount}")
@@ -301,13 +294,11 @@ async def adspam(interaction: discord.Interaction, amount: int = 15):
     except Exception as e:
         await log_error("adspam", e)
 
-@bot.tree.command(name="channelspam", description="Spam every text channel in this guild (whitelist)")
+@bot.tree.command(name="channelspam", description="Spam every text channel in this guild")
 @app_commands.describe(text="Message", amount="Per channel (1-10, default 3)")
 async def channelspam(interaction: discord.Interaction, text: str, amount: int = 3):
     if not await must_be_in_required_guild(interaction):
         return
-    if not is_whitelisted_user(interaction.user.id):
-        return await interaction.response.send_message("Whitelist only.", ephemeral=True)
     amount = max(1, min(int(amount), 10))
     await interaction.response.send_message("running...", ephemeral=True)
     await log_command(interaction, "channelspam", extra=f"Amount: {amount}")
@@ -335,12 +326,10 @@ async def channelspam(interaction: discord.Interaction, text: str, amount: int =
     except Exception:
         pass
 
-@bot.tree.command(name="doall", description="adspam + flood + spam + channelspam (whitelist)")
+@bot.tree.command(name="doall", description="adspam + flood + spam + channelspam")
 async def doall(interaction: discord.Interaction):
     if not await must_be_in_required_guild(interaction):
         return
-    if not is_whitelisted_user(interaction.user.id):
-        return await interaction.response.send_message("Whitelist only.", ephemeral=True)
     await interaction.response.send_message("doall running...", ephemeral=True)
     await log_command(interaction, "doall")
     try:
@@ -360,7 +349,7 @@ async def doall(interaction: discord.Interaction):
     except Exception as e:
         await log_error("doall", e)
 
-@bot.tree.command(name="pingall", description="Ping every member by @mention (no @everyone) — whitelist")
+@bot.tree.command(name="pingall", description="Ping every member by @mention (no @everyone)")
 @app_commands.describe(
     batch="Mentions per message (1-40, default 25)",
     loops="Full passes over the member list (1-20, default 1)",
@@ -374,8 +363,6 @@ async def pingall(
 ):
     if not await must_be_in_required_guild(interaction):
         return
-    if not is_whitelisted_user(interaction.user.id):
-        return await interaction.response.send_message("Whitelist only.", ephemeral=True)
 
     guild = interaction.guild
     if guild is None:
@@ -491,7 +478,7 @@ async def getemoji(interaction: discord.Interaction, emoji: str):
         )
 
 
-@bot.tree.command(name="memberlist", description="Dump all member @mentions for copy-paste (DM/ephemeral) — whitelist")
+@bot.tree.command(name="memberlist", description="Dump all member @mentions for copy-paste (DM/ephemeral)")
 @app_commands.describe(
     batch="Mentions per block (1-40, default 30)",
     where="dm, ephemeral, or both",
@@ -510,8 +497,6 @@ async def memberlist(
 ):
     if not await must_be_in_required_guild(interaction):
         return
-    if not is_whitelisted_user(interaction.user.id):
-        return await interaction.response.send_message("Whitelist only.", ephemeral=True)
 
     guild = interaction.guild
     if guild is None:
