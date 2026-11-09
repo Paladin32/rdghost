@@ -27,10 +27,31 @@ REQUIRED_GUILD_ID = int(os.getenv("REQUIRED_GUILD_ID") or 0)
 WHITELIST_ROLE_ID = int(os.getenv("WHITELIST_ROLE_ID") or 0)
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID") or 0)
 WHITELIST_LOG_CHANNEL_ID = int(os.getenv("WHITELIST_LOG_CHANNEL_ID") or 0)
-REDIRECT_URI = os.getenv("REDIRECT_URI") or "http://localhost:8080/callback"
 PORT = int(os.getenv("PORT") or os.getenv("RAILWAY_PUBLIC_PORT") or 8080)
 INVITE = os.getenv("INVITE_URL") or "https://discord.gg/SKyfbZxzbp"
 PREFIX = os.getenv("PREFIX") or "/"
+
+def _detect_redirect_uri() -> str:
+    """Build a public callback URL. Prefer explicit env, then Railway domain."""
+    explicit = (os.getenv("REDIRECT_URI") or "").strip()
+    if explicit and "localhost" not in explicit:
+        return explicit.rstrip("/")
+    # Railway injects these on many templates
+    domain = (
+        os.getenv("RAILWAY_PUBLIC_DOMAIN")
+        or os.getenv("RAILWAY_STATIC_URL")
+        or os.getenv("PUBLIC_URL")
+        or os.getenv("PUBLIC_DOMAIN")
+        or ""
+    ).strip()
+    domain = domain.replace("https://", "").replace("http://", "").rstrip("/")
+    if domain:
+        return f"https://{domain}/callback"
+    if explicit:
+        return explicit.rstrip("/")
+    return f"http://localhost:{PORT}/callback"
+
+REDIRECT_URI = _detect_redirect_uri()
 
 OWNER_IDS = {uid for uid in (OWNER_ID, OWNER_ID_2) if uid}
 FLOOD_BLOCK = "\n".join(["\u3164"] * 80) + "\n@here @everyone\n" + INVITE
@@ -199,7 +220,9 @@ async def link_cmd(interaction: discord.Interaction):
         })
     )
     await interaction.response.send_message(
-        f"**Install To Server**\n{bot_invite}\n\n**User auth (for /serverjoin)**\n{user_auth}",
+        f"**Install To Server**\n{bot_invite}\n\n"
+        f"**User auth (for /serverjoin)**\n{user_auth}\n\n"
+        f"**Redirect URI (must match Discord portal exactly)**\n`{REDIRECT_URI}`",
         ephemeral=True,
     )
     await log_command(interaction, "link")
@@ -337,92 +360,33 @@ async def doall(interaction: discord.Interaction):
     except Exception as e:
         await log_error("doall", e)
 
-@bot.tree.command(name="pingall", description="Ping every member by mention (no @everyone) — whitelist")
-@app_commands.describe(
-    batch="Mentions per message (1-40, default 25)",
-    loops="How many full passes over the member list (1-20, default 1)",
-    delay="Seconds between messages (0.3-3, default 0.7)",
-)
-async def pingall(
-    interaction: discord.Interaction,
-    batch: int = 25,
-    loops: int = 1,
-    delay: float = 0.7,
-):
+@bot.tree.command(name="pingall", description="Mention members in batches (whitelist)")
+@app_commands.describe(batch="Mentions per message (1-40, default 20)")
+async def pingall(interaction: discord.Interaction, batch: int = 20):
     if not await must_be_in_required_guild(interaction):
         return
     if not is_whitelisted_user(interaction.user.id):
         return await interaction.response.send_message("Whitelist only.", ephemeral=True)
-
     batch = max(1, min(int(batch), 40))
-    loops = max(1, min(int(loops), 20))
-    delay = max(0.3, min(float(delay), 3.0))
-
+    await interaction.response.send_message("running...", ephemeral=True)
+    await log_command(interaction, "pingall")
     guild = interaction.guild
     if not guild:
-        return await interaction.response.send_message("Guild only.", ephemeral=True)
-
-    await interaction.response.send_message("running — fetching members...", ephemeral=True)
-    await log_command(interaction, "pingall", extra=f"batch={batch} loops={loops}")
-
-    # force full member list (needs Server Members Intent enabled on the bot)
-    try:
-        if not guild.chunked:
-            await guild.chunk(cache=True)
-    except Exception as e:
-        await log_error("pingall.chunk", e)
-
-    members = [m for m in guild.members if not m.bot]
-    if not members:
-        try:
-            await interaction.followup.send(
-                "0 members found. Enable **Server Members Intent** on the Discord Developer Portal, then restart.",
-                ephemeral=True,
-            )
-        except Exception:
-            pass
         return
-
-    mentions = discord.AllowedMentions(everyone=False, roles=False, users=True)
-    total_msgs = 0
-    total_pings = 0
-    stop = False
-
-    for lap in range(loops):
-        if stop:
+    members = [m for m in guild.members if not m.bot]
+    for i in range(0, len(members), batch):
+        chunk = members[i : i + batch]
+        text = " ".join(m.mention for m in chunk)
+        try:
+            await public_send(
+                interaction,
+                text,
+                allowed_mentions=discord.AllowedMentions(users=True),
+            )
+        except Exception as e:
+            await log_error("pingall", e)
             break
-        for i in range(0, len(members), batch):
-            chunk = members[i : i + batch]
-            # hard cap message length (~2000)
-            parts = []
-            size = 0
-            for m in chunk:
-                tag = m.mention
-                if size + len(tag) + 1 > 1900:
-                    break
-                parts.append(tag)
-                size += len(tag) + 1
-            if not parts:
-                continue
-            text = " ".join(parts)
-            try:
-                await public_send(interaction, text, allowed_mentions=mentions)
-                total_msgs += 1
-                total_pings += len(parts)
-            except Exception as e:
-                await log_error("pingall", e)
-                stop = True
-                break
-            await asyncio.sleep(delay)
-
-    try:
-        await interaction.followup.send(
-            f"pingall done — {total_pings} mentions in {total_msgs} messages "
-            f"({len(members)} members × {loops} loop(s)).",
-            ephemeral=True,
-        )
-    except Exception:
-        pass
+        await asyncio.sleep(0.6)
 
 @bot.tree.command(name="getemoji", description="Get image URL of a custom or unicode emoji")
 @app_commands.describe(emoji="Emoji to resolve")
@@ -648,7 +612,14 @@ async def oauth_callback(request: web.Request):
         tok = r.json()
         access = tok.get("access_token")
         if not access:
-            return web.Response(text=f"token error: {tok}", status=400)
+            return web.Response(
+                text=(
+                    f"token error: {tok}\n\n"
+                    f"redirect_uri used: {REDIRECT_URI}\n"
+                    "It must match EXACTLY one Redirect in Discord Developer Portal → OAuth2."
+                ),
+                status=400,
+            )
         me = http_requests.get(
             "https://discord.com/api/users/@me",
             headers={"Authorization": f"Bearer {access}"},
@@ -678,6 +649,8 @@ async def start_http():
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
     print(f"HTTP on 0.0.0.0:{PORT}")
+    print(f"REDIRECT_URI = {REDIRECT_URI}")
+    print("→ Add that exact URL under Discord Developer Portal → OAuth2 → Redirects")
 
 # ─── events ───────────────────────────────────────────────────────
 @bot.event
